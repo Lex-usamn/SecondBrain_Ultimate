@@ -12,11 +12,12 @@ Funcionalidades:
 - Explicação de raciocínio
 
 Autor: Second Brain Ultimate System
-Versão: 1.0.0
+Versão: 1.0.1 (CORRIGIDA - Segura contra NoneType)
 """
 
 import logging
 import json
+import random
 from datetime import datetime
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass, field
@@ -29,7 +30,14 @@ except ImportError:
 try:
     from ..integrations.lex_flow_definitivo import LexFlowClient
 except ImportError:
-    from integrations.lex_flow_definitivo import LexFlowClient
+    try:
+        from integrations.lex_flow_definitivo import LexFlowClient
+    except ImportError:
+        # Último recurso: import absoluto
+        import sys
+        from pathlib import Path
+        sys.path.insert(0, str(Path(__file__).parent.parent))
+        from integrations.lex_flow_definitivo import LexFlowClient
 
 # ============================================
 # LOGGING
@@ -58,7 +66,7 @@ class Decision:
     """Uma decisão sugerida pelo engine"""
     action: str
     reason: str
-    confidence: float  # 0.0 a 1.0
+    confidence: float = 0.8  # 0.0 a 1.0
     context_used: Dict = field(default_factory=dict)
     alternatives: List[str] = field(default_factory=list)
 
@@ -76,12 +84,57 @@ class MorningPlan:
 @dataclass
 class ActionSuggestion:
     """Sugestão de ação imediata"""
-    action: str
-    urgency: str  # now, soon, later, someday
-    effort: str    # quick, medium, heavy
-    impact: str     # high, medium, low
-    reasoning: str
+    action: str = ""
+    urgency: str = "soon"      # now, soon, later, someday
+    effort: str = "medium"     # quick, medium, heavy
+    impact: str = "medium"     # high, medium, low
+    reasoning: str = ""
     next_steps: List[str] = field(default_factory=list)
+
+
+# ============================================
+# FUNÇÕES AUXILIARES DE SEGURANÇA
+# ============================================
+
+def safe_lower(value: Any) -> str:
+    """
+    Converte valor para string lowercase com segurança.
+    
+    Evita AttributeError quando value é None.
+    
+    Args:
+        value: Qualquer valor (str, int, None, etc.)
+        
+    Returns:
+        String em minúsculas (ou string vazia se None)
+    """
+    if value is None:
+        return ""
+    return str(value).lower()
+
+
+def safe_get(dictionary: Dict, key: str, default: Any = "") -> Any:
+    """
+    Get seguro de dicionário que nunca retorna None.
+    
+    Args:
+        dictionary: Dicionário para buscar
+        key: Chave procurada
+        default: Valor padrão se não encontrar ou for None
+        
+    Returns:
+        Valor encontrado ou default (nunca None)
+    """
+    if not dictionary:
+        return default
+    
+    value = dictionary.get(key, default)
+    
+    # Se o valor existir mas for None, retornar default
+    if value is None:
+        return default
+        
+    return value
 
 
 # ============================================
@@ -117,7 +170,13 @@ class DecisionEngine:
         
         log.info("⚖️  Decision Engine inicializado")
         log.info(f"   Memory: {type(memory).__name__}")
-        log.info(f"   Lex Flow: Conectado={lex_flow.is_authenticated()}")
+        
+        # Verificar se lex_flow tem método is_authenticated (seguro)
+        try:
+            is_auth = lex_flow.is_authenticated() if hasattr(lex_flow, 'is_authenticated') else False
+            log.info(f"   Lex Flow: Conectado={is_auth}")
+        except Exception:
+            log.info("   Lex Flow: Status desconhecido")
     
     def analyze_and_suggest_plan(
         self,
@@ -140,25 +199,30 @@ class DecisionEngine:
         - Histórico de padrões
         
         Args:
-            priorities: Prioridades do dashboard Lex Flow
-            stats: Estatísticas rápidas
-            projects: Projetos ativos
-            soul: Dados do SOUL.md
-            user: Dados do USER.md
-            time_context: Período do dia
-            extra_context: Contexto adicional
+            priorities: Prioridades do dashboard Lex Flow (pode ser lista vazia)
+            stats: Estatísticas rápidas (pode ser dict vazio)
+            projects: Projetos ativos (pode ser lista vazia)
+            soul: Dados do SOUL.md (opcional)
+            user: Dados do USER.md (opcional)
+            time_context: Período do dia (default: morning)
+            extra_context: Contexto adicional (opcional)
             
         Returns:
             MorningPlan com top 3 e insights
         """
         log.info(f"🌅 Gerando plano matinal (contexto: {time_context})")
         
+        # Garantir que são listas/dicts válidos (nunca None)
+        priorities = priorities or []
+        stats = stats or {}
+        projects = projects or []
+        
         plan = MorningPlan()
         plan.context_data = {
             'time_context': time_context,
             'priorities_count': len(priorities),
             'stats': stats,
-            'projects_active': len([p for p in projects if p.get('status') == 'active'])
+            'projects_active': len([p for p in projects if safe_get(p, 'status') == 'active'])
         }
         
         # 1. Enriquecer prioridades com dados da Memory
@@ -192,44 +256,55 @@ class DecisionEngine:
         
         Args:
             current_state: Estado atual (time_of_day, energy, etc.)
-            recent_actions: Últimas ações realizadas
-            energy: Nível de energia (low/medium/high)
+            recent_actions: Últimas ações realizadas (opcional)
+            energy: Nível de energia (low/medium/high) (default: medium)
             
         Returns:
             ActionSuggestion com ação e justificativa
         """
         log.info("💭 Analisando o que fazer agora...")
         
-        time_day = current_state.get('time_of_day', 'unknown')
-        energy_level = energy or current_state.get('energy', 'medium')
+        # Valores seguros com defaults
+        current_state = current_state or {}
+        time_day = safe_get(current_state, 'time_of_day', 'unknown')
+        energy_level = energy or safe_get(current_state, 'energy', 'medium')
         
         # Lógica de decisão baseada em contexto
         suggestion = ActionSuggestion()
         
         # Verificar projetos parados (CRÍTICO)
-        stalled = self._check_stalled_projects()
-        if stalled:
-            suggestion.action = f"Retomar projeto parado: {stalled[0].get('name', '?')}"
-            suggestion.urgency = "now"
-            suggestion.effort = "medium"
-            suggestion.impact = "high"
-            suggestion.reasoning = f"Projeto está parado há {stalled[0].get('days_stalled', '?')} dias"
-            suggestion.next_steps = [
-                "Abrir projeto no Lex Flow",
-                "Ver última tarefa realizada",
-                "Fazer próxima micro-ação (25 min)"
-            ]
-            return suggestion
+        try:
+            stalled = self._check_stalled_projects()
+            if stalled:
+                stalled_name = safe_get(stalled[0], 'name', 'projeto desconhecido')
+                stalled_days = safe_get(stalled[0], 'days_stalled', '?')
+                
+                suggestion.action = f"Retomar projeto parado: {stalled_name}"
+                suggestion.urgency = "now"
+                suggestion.effort = "medium"
+                suggestion.impact = "high"
+                suggestion.reasoning = f"Projeto está parado há {stalled_days} dias"
+                suggestion.next_steps = [
+                    "Abrir projeto no Lex Flow",
+                    "Ver última tarefa realizada",
+                    "Fazer próxima micro-ação (25 min)"
+                ]
+                return suggestion
+        except Exception as e:
+            log.debug(f"Erro verificando projetos parados: {e}")
         
         # Verificar inbox
-        inbox_size = len(self.lex_flow.get_inbox())
-        if inbox_size > 10:
-            suggestion.action = f"Processar Inbox ({inbox_size} itens pendentes)"
-            suggestion.urgency = "soon"
-            suggestion.effort = "medium"
-            suggestion.impact = "high"
-            suggestion.reasoning = "Inbox acumulada prejudica foco"
-            return suggestion
+        try:
+            inbox_size = len(self.lex_flow.get_inbox()) if self.lex_flow else 0
+            if inbox_size > 10:
+                suggestion.action = f"Processar Inbox ({inbox_size} itens pendentes)"
+                suggestion.urgency = "soon"
+                suggestion.effort = "medium"
+                suggestion.impact = "high"
+                suggestion.reasoning = "Inbox acumulada prejudica foco"
+                return suggestion
+        except Exception as e:
+            log.debug(f"Erro verificando inbox: {e}")
         
         # Baseado em energia e hora
         if energy_level == 'low' and time_day in ['afternoon', 'evening']:
@@ -254,17 +329,24 @@ class DecisionEngine:
             return suggestion
         
         # Default: sugerir baseado em prioridades do Lex Flow
-        priorities = self.lex_flow.get_today_priorities()
-        if priorities:
-            top = priorities[0]
-            suggestion.action = f"[{top.get('project_title', '?')}] {top.get('title', 'Tarefa')}"
-            suggestion.urgency = "now"
-            suggestion.effort = "medium"
-            suggestion.impact = "high"
-            suggestion.reasoning = "Prioridade #1 definida pelo sistema"
-            return suggestion
+        try:
+            if self.lex_flow and hasattr(self.lex_flow, 'get_today_priorities'):
+                priorities = self.lex_flow.get_today_priorities()
+                if priorities and len(priorities) > 0:
+                    top = priorities[0]
+                    top_project = safe_get(top, 'project_title', '')
+                    top_title = safe_get(top, 'title', 'Tarefa')
+                    
+                    suggestion.action = f"[{top_project}] {top_title}" if top_project else top_title
+                    suggestion.urgency = "now"
+                    suggestion.effort = "medium"
+                    suggestion.impact = "high"
+                    suggestion.reasoning = "Prioridade #1 definida pelo sistema"
+                    return suggestion
+        except Exception as e:
+            log.debug(f"Erro buscando prioridades: {e}")
         
-        # Fallback
+        # Fallback final
         suggestion.action = "Revisar suas metas e escolher próxima tarefa"
         suggestion.urgency = "soon"
         suggestion.effort = "light"
@@ -285,30 +367,30 @@ class DecisionEngine:
         por importância/urgência.
         
         Args:
-            tasks: Lista de tarefas com dados básicos
-            context: Contexto adicional para scoring
+            tasks: Lista de tarefas com dados básicos (pode ser vazia)
+            context: Contexto adicional para scoring (opcional)
             
         Returns:
-            Lista de tarefas ordenadas por score (maior primeiro)
+            Lista de tarefas ordenada por score (maior primeiro)
         """
+        tasks = tasks or []
         scored_tasks = []
         
         for task in tasks:
             score = 50  # Base score
             
             # Fator 1: Deadline (tarefas com deadline próximas sobem mais)
-            due_date = task.get('due_date')
+            due_date = safe_get(task, 'due_date')
             if due_date:
-                # Simplificado: se tiver deadline, aumenta prioridade
                 score += 20
             
             # Fator 2: Prioridade declarada
             priority_map = {'urgent': 30, 'high': 20, 'medium': 10, 'low': 5, 'someday': 0}
-            declared_priority = task.get('priority', 'medium').lower()
+            declared_priority = safe_lower(safe_get(task, 'priority', 'medium'))
             score += priority_map.get(declared_priority, 10)
             
             # Fator 3: Projeto estratégico (canais dark = prioridade)
-            project_title = task.get('project_title', '').lower()
+            project_title = safe_lower(safe_get(task, 'project_title'))
             if any(kw in project_title for kw in ['dark', 'canal', 'youtube']):
                 score += 15  # Canais dark são prioridade máxima
             
@@ -327,7 +409,7 @@ class DecisionEngine:
     def suggest_follow_ups(
         self,
         current_summary: Dict,
-        recent_actions: List[str],
+        recent_actions: List[str] = None,
         count: int = 3
     ) -> List[str]:
         """
@@ -335,17 +417,18 @@ class DecisionEngine:
         
         Args:
             current_summary: Resumo da sessão atual
-            recent_actions: Ações recentes realizadas
-            count: Quantidade de sugestões
+            recent_actions: Ações recentes realizadas (opcional)
+            count: Quantidade de sugestões (default: 3)
             
         Returns:
             Lista de strings com sugestões acionáveis
         """
         suggestions = []
         
-        # Analisar o que foi feito
-        ideas_captured = current_summary.get('ideas_captured', 0)
-        decisions_made = current_summary.get('decisions_made', 0)
+        # Garantir valores seguros
+        current_summary = current_summary or {}
+        ideas_captured = safe_get(current_summary, 'ideas_captured', 0)
+        decisions_made = safe_get(current_summary, 'decisions_made', 0)
         
         if ideas_captured > 0 and decisions_made == 0:
             suggestions.append(
@@ -362,18 +445,25 @@ class DecisionEngine:
         )
         
         # Sugestões baseadas em projetos
-        projects = self.lex_flow.get_projects()
-        active_projects = [p for p in projects if p.get('status') == 'active']
-        
-        if len(active_projects) > 1:
-            suggestions.append(
-                f"🎯 Foco: Escolha UM projeto principal para esta semana"
-            )
-        
-        if any('dark' in p.get('name', '').lower() for p in active_projects):
-            suggestions.append(
-                "🎬 Produza conteúdo para canal dark (meta: monetização)"
-            )
+        try:
+            if self.lex_flow and hasattr(self.lex_flow, 'get_projects'):
+                projects = self.lex_flow.get_projects() or []
+                active_projects = [p for p in projects if safe_get(p, 'status') == 'active']
+                
+                if len(active_projects) > 1:
+                    suggestions.append(
+                        "🎯 Foco: Escolha UM projeto principal para esta semana"
+                    )
+                
+                for p in active_projects:
+                    proj_name = safe_lower(safe_get(p, 'name'))
+                    if 'dark' in proj_name or 'canal' in proj_name:
+                        suggestions.append(
+                            "🎬 Produza conteúdo para canal dark (meta: monetização)"
+                        )
+                        break
+        except Exception as e:
+            log.debug(f"Erro buscando projetos para follow-ups: {e}")
         
         # Sempre adicionar sugestão de descanso
         suggestions.append(
@@ -388,18 +478,33 @@ class DecisionEngine:
     
     def _enrich_priorities(self, priorities: List[Dict], 
                           projects: List[Dict]) -> List[Dict]:
-        """Enriquece prioridades com dados adicionais"""
+        """
+        Enriquece prioridades com dados adicionais.
+        
+        ✅ CORRIGIDO: Agora é 100% seguro contra NoneType
+        """
         enriched = []
         
+        # Garantir listas válidas
+        priorities = priorities or []
+        projects = projects or []
+        
         for i, prio in enumerate(priorities[:5], 1):  # Top 5
-            project_title = prio.get('project_title', f'Projeto {i}')
-            title = prio.get('title', 'Tarefa sem nome')
+            # ✅ USANDO safe_get E safe_lower PARA EVITAR ERROS!
+            project_title = safe_get(prio, 'project_title', f'Projeto {i}')
+            title = safe_get(prio, 'title', 'Tarefa sem nome')
             
-            # Encontrar projeto correspondente
+            # Encontrar projeto correspondente (com segurança!)
             matching_project = None
+            project_title_lower = safe_lower(project_title)
+            
             for p in projects:
-                if project_title.lower() in p.get('name', '').lower() or \
-                   project_title.lower() in p.get('description', '').lower():
+                p_name = safe_lower(safe_get(p, 'name'))
+                p_desc = safe_lower(safe_get(p, 'description'))
+                
+                # ✅ VERIFICAÇÃO SEGURA - nunca dá erro de NoneType
+                if project_title_lower in p_name or \
+                   (p_desc and project_title_lower in p_desc):  # Só verifica desc se não for vazio
                     matching_project = p
                     break
             
@@ -413,12 +518,62 @@ class DecisionEngine:
                 'next_action_if_chosen': self._suggest_next_action(title)
             })
         
+        # Se não houver prioridades, criar sugestões genéricas
+        if not enriched:
+            enriched = self._generate_default_priorities(projects)
+        
         return enriched
+    
+    def _generate_default_priorities(self, projects: List[Dict]) -> List[Dict]:
+        """
+        Gera prioridades padrão quando não há prioridades do Lex Flow
+        """
+        defaults = []
+        projects = projects or []
+        
+        # Prioridade 1: Canais Dark (sempre prioridade máxima)
+        defaults.append({
+            'rank': 1,
+            'project': 'Canais Dark',
+            'task': 'Produzir conteúdo ou analisar métricas',
+            'project_obj': None,
+            'estimated_time': '2-4 horas',
+            'why_important': 'Meta principal: monetização de 3+ canais',
+            'next_action_if_chosen': 'Definir tipo de conteúdo para hoje'
+        })
+        
+        # Prioridade 2: Projeto ativo mais recente
+        if projects:
+            active = [p for p in projects if safe_get(p, 'status') == 'active']
+            if active:
+                latest = active[0]
+                defaults.append({
+                    'rank': 2,
+                    'project': safe_get(latest, 'name', 'Projeto Ativo'),
+                    'task': 'Continuar trabalho em andamento',
+                    'project_obj': latest,
+                    'estimated_time': '1-2 horas',
+                    'why_important': 'Manter momentum do projeto',
+                    'next_action_if_chosen': 'Ver última tarefa feita'
+                })
+        
+        # Prioridade 3: Inbox/Processamento
+        defaults.append({
+            'rank': 3,
+            'project': 'Inbox / Organização',
+            'task': 'Processar itens pendentes',
+            'project_obj': None,
+            'estimated_time': '30-45 min',
+            'why_important': 'Manter sistema organizado evita sobrecarga cognitiva',
+            'next_action_if_chosen': 'Abrir Inbox e processar 5 itens'
+        })
+        
+        return defaults
     
     def _estimate_time(self, task: str, project: str = "") -> str:
         """Estima tempo necessário para tarefa"""
-        task_lower = task.lower()
-        project_lower = project.lower()
+        task_lower = safe_lower(task)
+        project_lower = safe_lower(project)
         
         # Heurísticas simples
         if any(w in task_lower for w in ['estudar', 'aprender', 'learn', 'ler']):
@@ -444,41 +599,50 @@ class DecisionEngine:
             'App': 'Entrega concreta de valor'
         }
         
+        project_lower = safe_lower(project)
+        
         for key, reason in reasons.items():
-            if key.lower() in project.lower():
+            if key.lower() in project_lower:
                 return reason
         
         return "Contribui para progresso das metas estabelecidas"
     
     def _suggest_next_action(self, task: str) -> str:
         """Sugere próximo passo após escolher tarefa"""
-        if 'estudar' in task.lower():
+        task_lower = safe_lower(task)
+        
+        if 'estudar' in task_lower:
             return "Definir tópicos específicos e tempo dedicado"
-        elif 'vídeo' in task.lower() or 'video' in task.lower():
+        elif 'vídeo' in task_lower or 'video' in task_lower:
             return "Criar roteiro ou outline do vídeo"
-        elif 'post' in task.lower():
+        elif 'post' in task_lower:
             return "Escolher imagem/hook e escrever copy"
         else:
             return "Dividir em micro-tarefas (< 30 min cada)"
     
     def _check_stalled_projects(self) -> List[Dict]:
         """Verifica projetos que podem estar parados"""
-        projects = self.lex_flow.get_projects()
         stalled = []
         
-        # Lógica simplificada - na implementação real verificar datas
-        for p in projects:
-            # Se não tiver atividade recente, marcar como possivelmente parado
-            last_activity = p.get('updated_at', p.get('created_at'))
-            status = p.get('status', '')
+        try:
+            if not self.lex_flow or not hasattr(self.lex_flow, 'get_projects'):
+                return stalled
+                
+            projects = self.lex_flow.get_projects() or []
             
-            # Heurística: se não tem tasks ou status não é active
-            if status != 'active':
-                stalled.append({
-                    'name': p.get('name'),
-                    'status': status,
-                    'days_staled': 'N/A (verificar)'
-                })
+            for p in projects:
+                status = safe_get(p, 'status', '')
+                
+                # Heurística: se não está active, pode estar parado
+                if status != 'active':
+                    stalled.append({
+                        'name': safe_get(p, 'name', 'Projeto sem nome'),
+                        'status': status,
+                        'days_stalled': 'N/A (verificar manualmente)'
+                    })
+                    
+        except Exception as e:
+            log.debug(f"Erro verificando projetos parados: {e}")
         
         return stalled
     
@@ -502,15 +666,15 @@ class DecisionEngine:
         insights_evening = [
             "🌙 Prepare o amanhã enquanto sua mente ainda está fresca",
             "📋 Revise o que funcionou hoje e o que pode melhorar",
-            "🙏️ Gratidão: 3 coisas que você é grato hoje",
+            "🙏 Gratidão: 3 coisas que você é grato hoje",
         ]
         
         if time_context == 'morning':
-            return insights_morning[0] if insights_morning else "Bom dia! Vamos conquistar juntos."
+            return random.choice(insights_morning) if insights_morning else "Bom dia! Vamos conquistar juntos."
         elif time_context == 'afternoon':
-            return insights_afternoon[0] if insights_afternoon else "Boa tarde! Revisão de meio-dia."
+            return random.choice(insights_afternoon) if insights_afternoon else "Boa tarde! Revisão de meio-dia."
         elif time_context == 'evening':
-            return insights_evening[0] if insights_evening else "Boa noite! Hora de encerrar."
+            return random.choice(insights_evening) if insights_evening else "Boa noite! Hora de encerrar."
         else:
             return "💫 Mantenha o foco. Você está construindo algo incrível!"
     
@@ -530,7 +694,7 @@ class DecisionEngine:
                 "16:00 - 17:00: Revisão do dia + Planejamento amanhã"
             ),
             'afternoon': (
-                "🌆 **Rotana de Tarde Sugerida:**\n"
+                "🌆 **Rotina de Tarde Sugerida:**\n"
                 "14:00 - 14:30: Briefing da tarde\n"
                 "14:30 - 16:30: Deep Work (execução focada)\n"
                 "16:30 - 17:00: Pausa + Caminhada curta\n"
@@ -546,7 +710,7 @@ class DecisionEngine:
             )
         }
         
-        return routines.get(time_context, routines.get('morning')[0])
+        return routines.get(time_context, routines.get('morning', ''))
     
     def _get_motivation_quote(self, time_context: str) -> str:
         """Retorna citação motivacional"""
@@ -568,7 +732,6 @@ class DecisionEngine:
             ]
         }
         
-        import random
         return random.choice(quotes.get(time_context, quotes['morning']))
 
 
@@ -583,7 +746,7 @@ if __name__ == "__main__":
     
     # Setup simplificado para teste
     try:
-        from integrations.lex_flow_definitivo import LexFlowClient, LexFlowConfig
+        from integrations.lex_flow_definitivo import LexFlowConfig
         
         lf = LexFlowClient(LexFlowConfig())
         memory = MemorySystem(vault_path="./")
@@ -594,7 +757,7 @@ if __name__ == "__main__":
         
         # Teste 1: O que fazer agora?
         print("\n💭 PERGUNTA: O que fazer agora?")
-        suggestion = decider.what_to_do_now(energy="high", time_context="morning")
+        suggestion = decider.suggest_next_action(energy="high", current_state={'time_of_day': 'morning'})
         print(f"\n   ➡️  AÇÃO SUGERIDA: {suggestion.action}")
         print(f"   ⏱️  URGÊNCIA: {suggestion.urgency}")
         print(f"   💪 ESFORÇO: {suggestion.effort}")
