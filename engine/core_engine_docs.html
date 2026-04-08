@@ -1,0 +1,1264 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Módulo 2: Second Brain Engine</title>
+    
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    
+    <!-- MathJax -->
+    <script>
+    window.MathJax = {
+      tex: {
+        inlineMath: [['$', '$'], ['\\(', '\\)'], ['$$', '$$'], ['\\[', '\\]']], 
+        displayMath: []
+      },
+      svg: { fontCache: 'global' }
+    };
+    </script>
+    <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-svg.js"></script>
+
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        :root {
+            --bg-primary: #0a0a0f;
+            --bg-secondary: #12121a;
+            --bg-tertiary: #1a1a28;
+            --text-primary: #e4e4e7;
+            --text-secondary: #a1a1aa;
+            --text-muted: #71717a;
+            --accent-blue: #3b82f6;
+            --accent-purple: #8b5cf6;
+            --accent-cyan: #06b6d4;
+            --accent-green: #10b981;
+            --accent-orange: #f59e0b;
+            --accent-red: #ef4444;
+            --border-color: #27272a;
+            --card-bg: rgba(26, 26, 40, 0.6);
+            --glow-color: rgba(59, 130, 246, 0.3);
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            line-height: 1.7;
+            overflow-x: hidden;
+        }
+
+        /* Animated Background */
+        .bg-animation {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: -1;
+            overflow: hidden;
+        }
+
+        .bg-gradient {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            background: 
+                radial-gradient(circle at 20% 30%, rgba(59, 130, 246, 0.08) 0%, transparent 50%),
+                radial-gradient(circle at 80% 70%, rgba(139, 92, 246, 0.06) 0%, transparent 50%),
+                radial-gradient(circle at 50% 90%, rgba(6, 182, 212, 0.05) 0%, transparent 40%);
+        }
+
+        .grid-pattern {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            background-image: 
+                linear-gradient(rgba(255,255,255,0.02) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(255,255,255,0.02) 1px, transparent 1px);
+            background-size: 60px 60px;
+            mask-image: radial-gradient(ellipse at center, black 20%, transparent 70%);
+        }
+
+        /* Container */
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 0 24px;
+        }
+
+        /* Header */
+        header {
+            padding: 80px 0 60px;
+            text-align: center;
+            position: relative;
+        }
+
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 16px;
+            background: rgba(59, 130, 246, 0.1);
+            border: 1px solid rgba(59, 130, 246, 0.3);
+            border-radius: 9999px;
+            font-size: 13px;
+            font-weight: 500;
+            color: var(--accent-blue);
+            margin-bottom: 24px;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+        }
+
+        h1 {
+            font-size: clamp(36px, 5vw, 64px);
+            font-weight: 800;
+            line-height: 1.1;
+            margin-bottom: 20px;
+            background: linear-gradient(135deg, var(--text-primary) 0%, var(--accent-blue) 50%, var(--accent-purple) 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .subtitle {
+            font-size: 18px;
+            color: var(--text-secondary);
+            max-width: 700px;
+            margin: 0 auto;
+            line-height: 1.8;
+        }
+
+        /* Section */
+        section {
+            padding: 60px 0;
+            position: relative;
+        }
+
+        .section-title {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            font-size: 28px;
+            font-weight: 700;
+            margin-bottom: 32px;
+            color: var(--text-primary);
+        }
+
+        .section-title .icon {
+            font-size: 32px;
+        }
+
+        /* Cards Grid */
+        .cards-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+            gap: 24px;
+            margin-top: 32px;
+        }
+
+        /* Card Component */
+        .card {
+            background: var(--card-bg);
+            backdrop-filter: blur(10px);
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+            padding: 28px;
+            transition: all 0.3s ease;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 3px;
+            background: linear-gradient(90deg, var(--accent-blue), var(--accent-purple));
+            opacity: 0;
+            transition: opacity 0.3s ease;
+        }
+
+        .card:hover {
+            transform: translateY(-4px);
+            border-color: rgba(59, 130, 246, 0.3);
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.3), 0 0 60px var(--glow-color);
+        }
+
+        .card:hover::before {
+            opacity: 1;
+        }
+
+        .card-header {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            margin-bottom: 16px;
+        }
+
+        .card-icon {
+            width: 48px;
+            height: 48px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: linear-gradient(135deg, rgba(59, 130, 246, 0.15), rgba(139, 92, 246, 0.15));
+            border-radius: 12px;
+            font-size: 24px;
+        }
+
+        .card-status {
+            font-size: 12px;
+            font-weight: 500;
+            padding: 4px 10px;
+            border-radius: 6px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .status-ready {
+            background: rgba(16, 185, 129, 0.15);
+            color: var(--accent-green);
+            border: 1px solid rgba(16, 185, 129, 0.3);
+        }
+
+        .status-core {
+            background: rgba(59, 130, 246, 0.15);
+            color: var(--accent-blue);
+            border: 1px solid rgba(59, 130, 246, 0.3);
+        }
+
+        .status-new {
+            background: rgba(245, 158, 11, 0.15);
+            color: var(--accent-orange);
+            border: 1px solid rgba(245, 158, 11, 0.3);
+        }
+
+        .card-title {
+            font-size: 18px;
+            font-weight: 600;
+            margin-bottom: 8px;
+            color: var(--text-primary);
+        }
+
+        .card-desc {
+            font-size: 14px;
+            color: var(--text-secondary);
+            line-height: 1.6;
+            margin-bottom: 16px;
+        }
+
+        .card-list {
+            list-style: none;
+            padding: 0;
+        }
+
+        .card-list li {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 0;
+            font-size: 13px;
+            color: var(--text-secondary);
+            border-bottom: 1px solid rgba(255,255,255,0.03);
+        }
+
+        .card-list li:last-child {
+            border-bottom: none;
+        }
+
+        .card-list .check {
+            color: var(--accent-green);
+            font-size: 14px;
+        }
+
+        /* Code Block */
+        .code-block {
+            background: var(--bg-primary);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 20px;
+            margin-top: 16px;
+            position: relative;
+            overflow-x: auto;
+        }
+
+        .code-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 12px;
+            padding-bottom: 12px;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .code-lang {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 12px;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .copy-btn {
+            font-size: 12px;
+            color: var(--text-muted);
+            cursor: pointer;
+            padding: 4px 8px;
+            border-radius: 4px;
+            transition: all 0.2s;
+        }
+
+        .copy-btn:hover {
+            background: rgba(255,255,255,0.05);
+            color: var(--text-primary);
+        }
+
+        pre {
+            margin: 0;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 13px;
+            line-height: 1.6;
+            color: var(--text-secondary);
+            overflow-x: auto;
+        }
+
+        code {
+            font-family: inherit;
+        }
+
+        .keyword { color: var(--accent-purple); }
+        .function { color: var(--accent-blue); }
+        .string { color: var(--accent-green); }
+        .comment { color: var(--text-muted); font-style: italic; }
+        .decorator { color: var(--accent-cyan); }
+
+        /* Architecture Diagram */
+        .architecture {
+            background: var(--card-bg);
+            backdrop-filter: blur(10px);
+            border: 1px solid var(--border-color);
+            border-radius: 20px;
+            padding: 40px;
+            margin: 40px 0;
+        }
+
+        .arch-layer {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 20px 24px;
+            margin-bottom: 16px;
+            position: relative;
+        }
+
+        .arch-layer:last-child {
+            margin-bottom: 0;
+        }
+
+        .arch-label {
+            position: absolute;
+            top: -10px;
+            left: 20px;
+            background: var(--bg-secondary);
+            padding: 2px 12px;
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--accent-blue);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+        }
+
+        .arch-items {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-top: 8px;
+        }
+
+        .arch-item {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 8px 14px;
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            font-size: 13px;
+            font-weight: 500;
+            transition: all 0.2s;
+        }
+
+        .arch-item:hover {
+            border-color: var(--accent-blue);
+            background: rgba(59, 130, 246, 0.08);
+        }
+
+        .arch-item .dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+        }
+
+        .dot-blue { background: var(--accent-blue); box-shadow: 0 0 8px var(--accent-blue); }
+        .dot-purple { background: var(--accent-purple); box-shadow: 0 0 8px var(--accent-purple); }
+        .dot-cyan { background: var(--accent-cyan); box-shadow: 0 0 8px var(--accent-cyan); }
+        .dot-green { background: var(--accent-green); box-shadow: 0 0 8px var(--accent-green); }
+        .dot-orange { background: var(--accent-orange); box-shadow: 0 0 8px var(--accent-orange); }
+
+        /* Feature Grid */
+        .feature-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            margin-top: 32px;
+        }
+
+        .feature-item {
+            display: flex;
+            align-items: flex-start;
+            gap: 14px;
+            padding: 20px;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            transition: all 0.3s ease;
+        }
+
+        .feature-item:hover {
+            border-color: rgba(59, 130, 246, 0.3);
+            transform: translateX(4px);
+        }
+
+        .feature-icon {
+            font-size: 24px;
+            flex-shrink: 0;
+        }
+
+        .feature-content h4 {
+            font-size: 15px;
+            font-weight: 600;
+            margin-bottom: 4px;
+            color: var(--text-primary);
+        }
+
+        .feature-content p {
+            font-size: 13px;
+            color: var(--text-secondary);
+            line-height: 1.5;
+        }
+
+        /* Stats Bar */
+        .stats-bar {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 16px;
+            margin: 40px 0;
+        }
+
+        .stat-item {
+            text-align: center;
+            padding: 24px 16px;
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+        }
+
+        .stat-number {
+            font-size: 32px;
+            font-weight: 800;
+            background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .stat-label {
+            font-size: 13px;
+            color: var(--text-muted);
+            margin-top: 4px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        /* Footer */
+        footer {
+            text-align: center;
+            padding: 60px 0 40px;
+            border-top: 1px solid var(--border-color);
+            color: var(--text-muted);
+            font-size: 14px;
+        }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            header {
+                padding: 60px 0 40px;
+            }
+            
+            h1 {
+                font-size: 32px;
+            }
+            
+            .subtitle {
+                font-size: 15px;
+            }
+            
+            .cards-grid {
+                grid-template-columns: 1fr;
+            }
+            
+            .architecture {
+                padding: 24px;
+            }
+            
+            .arch-items {
+                flex-direction: column;
+            }
+        }
+
+        /* Scrollbar */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: var(--bg-primary);
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: var(--border-color);
+            border-radius: 4px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: var(--text-muted);
+        }
+    </style>
+</head>
+<body>
+    <div class="bg-animation">
+        <div class="bg-gradient"></div>
+        <div class="grid-pattern"></div>
+    </div>
+
+    <div class="container">
+        <header>
+            <div class="badge">⚡ Módulo 2 • Second Brain Engine</div>
+            <h1>Motor Inteligente do<br>Segundo Cérebro</h1>
+            <p class="subtitle">
+                Arquitetura completa que integra <strong>Lex Flow</strong>, <strong>IA Claude</strong>, 
+                <strong>Memory System</strong> e <strong>Automações</strong> em um único cérebro digital 
+                unificado e adaptável.
+            </p>
+        </header>
+
+        <!-- Stats Overview -->
+        <div class="stats-bar">
+            <div class="stat-item">
+                <div class="stat-number">6</div>
+                <div class="stat-label">Módulos Core</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-number">∞</div>
+                <div class="stat-label">APIs Extensíveis</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-number">24/7</div>
+                <div class="stat-label">Monitoramento</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-number">100%</div>
+                <div class="stat-label">Configurável</div>
+            </div>
+        </div>
+
+        <!-- Architecture Section -->
+        <section id="architecture">
+            <h2 class="section-title"><span class="icon">🏗️</span>Arquitetura do Motor</h2>
+            
+            <div class="architecture">
+                <div class="arch-layer">
+                    <span class="arch-label">Camada 1: Interface & Captura</span>
+                    <div style="font-weight: 600; margin-bottom: 12px; color: var(--text-primary);">
+                        Pontos de entrada para dados e comandos
+                    </div>
+                    <div class="arch-items">
+                        <div class="arch-item"><span class="dot dot-blue"></span> CLI / Terminal</div>
+                        <div class="arch-item"><span class="dot dot-blue"></span> Telegram Bot</div>
+                        <div class="arch-item"><span class="dot dot-blue"></span> Discord Bot</div>
+                        <div class="arch-item"><span class="dot dot-blue"></span> Quick Capture</div>
+                        <div class="arch-item"><span class="dot dot-blue"></span> Web Dashboard</div>
+                    </div>
+                </div>
+
+                <div class="arch-layer">
+                    <span class="arch-label">Camada 2: Core Engine (Cérebro)</span>
+                    <div style="font-weight: 600; margin-bottom: 12px; color: var(--text-primary);">
+                        Orquestração inteligente de todas as operações
+                    </div>
+                    <div class="arch-items">
+                        <div class="arch-item"><span class="dot dot-purple"></span> Core Engine</div>
+                        <div class="arch-item"><span class="dot dot-purple"></span> Memory System</div>
+                        <div class="arch-item"><span class="dot dot-purple"></span> Decision Engine</div>
+                        <div class="arch-item"><span class="dot dot-purple"></span> Context Manager</div>
+                    </div>
+                </div>
+
+                <div class="arch-layer">
+                    <span class="arch-label">Camada 3: Integrações & Dados</span>
+                    <div style="font-weight: 600; margin-bottom: 12px; color: var(--text-primary);">
+                        Conexão com APIs externas e bases de dados
+                    </div>
+                    <div class="arch-items">
+                        <div class="arch-item"><span class="dot dot-cyan"></span> Lex Flow API</div>
+                        <div class="arch-item"><span class="dot dot-cyan"></span> Claude AI</div>
+                        <div class="arch-item"><span class="dot dot-cyan"></span> Gemini AI</div>
+                        <div class="arch-item"><span class="dot dot-cyan"></span> Obsidian Vault</div>
+                        <div class="arch-item"><span class="dot dot-cyan"></span> YouTube API</div>
+                        <div class="arch-item"><span class="dot dot-cyan"></span> Instagram API</div>
+                    </div>
+                </div>
+
+                <div class="arch-layer">
+                    <span class="arch-label">Camada 4: Automação & Output</span>
+                    <div style="font-weight: 600; margin-bottom: 12px; color: var(--text-primary);">
+                        Processos automáticos e entregas
+                    </div>
+                    <div class="arch-items">
+                        <div class="arch-item"><span class="dot dot-green"></span> Heartbeat Monitor</div>
+                        <div class="arch-item"><span class="dot dot-green"></span> Daily Briefing</div>
+                        <div class="arch-item"><span class="dot dot-green"></span> Weekly Review</div>
+                        <div class="arch-item"><span class="dot dot-green"></span> Alert System</div>
+                        <div class="arch-item"><span class="dot dot-orange"></span> Content Generator</div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Core Modules Section -->
+        <section id="modules">
+            <h2 class="section-title"><span class="icon">⚙️</span>Módulos do Engine</h2>
+            
+            <div class="cards-grid">
+                <!-- Card 1: Core Engine -->
+                <div class="card">
+                    <div class="card-header">
+                        <div class="card-icon">🧠</div>
+                        <span class="card-status status-core">Core</span>
+                    </div>
+                    <h3 class="card-title">Core Engine</h3>
+                    <p class="card-desc">
+                        O cérebro central que orquestra todos os outros sistemas. 
+                        Gerencia ciclo de vida completo das informações.
+                    </p>
+                    <ul class="card-list">
+                        <li><span class="check">✓</span> Inicialização e configuração</li>
+                        <li><span class="check">✓</span> Orquestração de módulos</li>
+                        <li><span class="check">✓</span> Pipeline de processamento</li>
+                        <li><span class="check">✓</span> Tratamento de erros global</li>
+                        <li><span class="check">✓</span> Logging estruturado</li>
+                    </ul>
+                    <div class="code-block">
+                        <div class="code-header">
+                            <span class="code-lang">Python</span>
+                            <span class="copy-btn">Copiar</span>
+                        </div>
+                        <pre><code><span class="keyword">from</span> engine.core_engine <span class="keyword">import</span> SecondBrainEngine
+
+<span class="comment"># Inicializar o cérebro</span>
+<span class="function">brain</span> = <span class="function">SecondBrainEngine</span>(
+    config=<span class="string">'config.yaml'</span>,
+    lex_flow_client=lf_client
+)
+
+<span class="comment"># Iniciar todos os sistemas</span>
+brain.<span class="function">initialize</span>()
+
+<span class="comment"># Processar inbox automaticamente</span>
+result = brain.<span class="function">process_inbox</span>()</code></pre>
+                    </div>
+                </div>
+
+                <!-- Card 2: Memory System -->
+                <div class="card">
+                    <div class="card-header">
+                        <div class="card-icon">💾</div>
+                        <span class="card-status status-core">Core</span>
+                    </div>
+                    <h3 class="card-title">Memory System</h3>
+                    <p class="card-desc">
+                        Gerencia os arquivos core (SOUL, USER, MEMORY, HEARTBEAT) 
+                        como memória de longo prazo do sistema.
+                    </p>
+                    <ul class="card-list">
+                        <li><span class="check">✓</span> Leitura/Escrita de arquivos MD</li>
+                        <li><span class="check">✓</span> Parse estruturado de conteúdo</li>
+                        <li><span class="check">✓</span> Atualização incremental</li>
+                        <li><span class="check">✓</span> Busca por seção/chave</li>
+                        <li><span class="check">✓</span> Sync com Lex Flow</li>
+                    </ul>
+                    <div class="code-block">
+                        <div class="code-header">
+                            <span class="code-lang">Python</span>
+                            <span class="copy-btn">Copiar</span>
+                        </div>
+                        <pre><code><span class="keyword">from</span> engine.memory_system <span class="keyword">import</span> MemorySystem
+
+memory = <span class="function">MemorySystem</span>(vault_path=<span class="string">'./'</span>)
+
+<span class="comment"># Carregar identidade</span>
+soul = memory.<span class="function">load_soul</span>()
+user = memory.<span class="function">load_user</span>()
+
+<span class="commentAtualizar aprendizado</span>
+memory.<span class="function">add_lesson</span>(
+    category=<span class="string">'Produtividade'</span>,
+    lesson=<span class="string">'Fazer 1 coisa de cada vez'</span>
+)</code></pre>
+                    </div>
+                </div>
+
+                <!-- Card 3: Decision Engine -->
+                <div class="card">
+                    <div class="card-header">
+                        <div class="card-icon">⚖️</div>
+                        <span class="card-status status-core">Core</span>
+                    </div>
+                    <h3 class="card-title">Decision Engine</h3>
+                    <p class="card-desc">
+                        Combina dados reais + IA para tomar decisões inteligentes 
+                        sobre prioridades, próximos passos e otimizações.
+                    </p>
+                    <ul class="card-list">
+                        <li><span class="check">✓</span> Análise de contexto completo</li>
+                        <li><span class="check">✓</span> Integração Claude/Gemini</li>
+                        <li><span class="check">✓</span> Scoring de prioridades</li>
+                        <li><span class="check">✓</span> Sugestões acionáveis</li>
+                        <li><span class="check">✓</span> Explicação de decisões</li>
+                    </ul>
+                    <div class="code-block">
+                        <div class="code-header">
+                            <span class="code-lang">Python</span>
+                            <span class="copy-btn">Copiar</span>
+                        </div>
+                        <pre><code><span class="keyword">from</span> engine.decision_engine <span class="keyword">import</span> DecisionEngine
+
+decider = <span class="function">DecisionEngine</span>(memory, lex_flow)
+
+<span class="comment"># O que fazer agora?</span>
+decision = decider.<span class="function">what_to_do_now</span>(
+    context=<span class="string">'manhã'</span>,
+    energy_level=<span class="string">'alta'</span>
+)
+
+<span class="print(f"Sugestão: {decision['action']}")</span>
+<span class="print(f"Porquê: {decision['reasoning']}")</span></code></pre>
+                    </div>
+                </div>
+
+                <!-- Card 4: Capture System -->
+                <div class="card">
+                    <div class="card-header">
+                        <div class="card-icon">📥</div>
+                        <span class="card-status status-new">Novo</span>
+                    </div>
+                    <h3 class="card-title">Capture System</h3>
+                    <p class="card-desc">
+                        Captura inteligente multi-canal com categorização 
+                        automática, tags sugeridas e roteamento para projetos.
+                    </p>
+                    <ul class="card-list">
+                        <li><span class="check">✓</span> Quick capture (texto/voz)</li>
+                        <li><span class="check">✓</span> Captura via Telegram/Discord</li>
+                        <li><span class="check">✓</span> Categorização IA automática</li>
+                        <li><span class="check">✓</span> Extração de metadados</li>
+                        <li><span class="check">✓</span> Deduplicação inteligente</li>
+                    </ul>
+                    <div class="code-block">
+                        <div class="code-header">
+                            <span class="code-lang">Python</span>
+                            <span class="copy-btn">Copiar</span>
+                        </div>
+                        <pre><code><span class="keyword">from</span> engine.capture_system <span class="keyword">import</span> CaptureSystem
+
+capture = <span class="function">CaptureSystem</span>(lex_flow, memory)
+
+<span class="capturar ideia rapidamente</span>
+capture.<span class="function">quick_capture</span>(
+    idea=<span class="string">'Vídeo sobre lugares abandonados em SP'</span>,
+    source=<span class="string">'telegram'</span>,
+    tags=[<span class="string">'dark'</span>, <span class="string">'youtube'</span>]
+)
+<span class="# → Salva no Inbox + sugere projeto alvo</span></code></pre>
+                    </div>
+                </div>
+
+                <!-- Card 5: Automation System -->
+                <div class="card">
+                    <div class="card-header">
+                        <div class="card-icon">🔄</div>
+                        <span class="card-status status-new">Novo</span>
+                    </div>
+                    <h3 class="card-title">Automation System</h3>
+                    <p class="card-desc">
+                        Monitoramento proativo (Heartbeat), alertas inteligentes, 
+                        rotinas automáticas e sincronização contínua.
+                    </p>
+                    <ul class="card-list">
+                        <li><span class="check">✓</span> Heartbeat (cada 30 min)</li>
+                        <li><span class="check">✓</span> Detecção de projetos parados</li>
+                        <li><span class="check">✓</span> Alertas priorizadas</li>
+                        <li><span class="check">✓</span> Daily briefing automático</li>
+                        <li><span class="check">✓</span> Weekly review TELOS</li>
+                    </ul>
+                    <div class="code-block">
+                        <div class="code-header">
+                            <span class="code-lang">Python</span>
+                            <span class="copy-btn">Copiar</span>
+                        </div>
+                        <pre><code><span class="keyword">from</span> engine.automation_system <span class="keyword">import</span> AutomationSystem
+
+auto = <span class="function">AutomationSystem</span>(brain, memory, lex_flow)
+
+<span class="# Rodar heartbeat (chamar a cada 30min)</span>
+report = auto.<span class="function">heartbeat_check</span>()
+
+<span class="if report['alerts']:</span>
+    auto.<span class="function">send_alerts</span>(report[<span class="string">'alerts'</span>])
+    auto.<span class="function">update_dashboard</span>(report)</code></pre>
+                    </div>
+                </div>
+
+                <!-- Card 6: Insight Generator -->
+                <div class="card">
+                    <div class="card-header">
+                        <div class="card-icon">💡</div>
+                        <span class="card-status status-new">Novo</span>
+                    </div>
+                    <h3 class="card-title">Insight Generator</h3>
+                    <p class="card-desc">
+                        Gera insights automáticos a partir dos seus dados, 
+                        identificando padrões, oportunidades e riscos.
+                    </p>
+                    <ul class="card-list">
+                        <li><span class="check">✓</span> Análise de padrões de produtividade</li>
+                        <li><span class="check">✓</span> Identificação de gargalos</li>
+                        <li><span class="check">✓</span> Sugestões de otimização</li>
+                        <li><span class="check">✓</span> Tendências de conteúdo</li>
+                        <li><span class="check">✓</span> Previsão de burnout</li>
+                    </ul>
+                    <div class="code-block">
+                        <div class="code-header">
+                            <span class="code-lang">Python</span>
+                            <span class="copy-btn">Copiar</span>
+                        </div>
+                        <pre><code><span class="keyword">from</span> engine.insight_generator <span class="keyword">import</span> InsightGenerator
+
+insights = <span class="function">InsightGenerator</span>(lex_flow, memory)
+
+<span class="# Gerar insights semanais</span>
+weekly = insights.<span class="function">generate_weekly_insights</span>()
+
+<span class="for insight in weekly:</span>
+    <span class="print(f"💡 {insight['type']}: {insight['message']}")</span>
+    <span class="print(f"   Impacto: {insight['impact']}")</span></code></pre>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Features Detail -->
+        <section id="features">
+            <h2 class="section-title"><span class="icon">✨</span>Capacidades Principais</h2>
+            
+            <div class="feature-grid">
+                <div class="feature-item">
+                    <div class="feature-icon">🎯</div>
+                    <div class="feature-content">
+                        <h4>Foco Inteligente</h4>
+                        <p>Sempre sabe qual é a próxima ação mais importante baseada em contexto, energia e metas.</p>
+                    </div>
+                </div>
+
+                <div class="feature-item">
+                    <div class="feature-icon">⚡</div>
+                    <div class="feature-content">
+                        <h4>Captura Instantânea</h4>
+                        <p>Ideias, tarefas e pensamentos capturados em segundos via qualquer canal disponível.</p>
+                    </div>
+                </div>
+
+                <div class="feature-item">
+                    <div class="feature-icon">🧠</div>
+                    <div class="feature-content">
+                        <h4>Memória Eterna</h4>
+                        <p>Tudo que você aprende é armazenado, indexado e recuperável quando precisar.</p>
+                    </div>
+                </div>
+
+                <div class="feature-item">
+                    <div class="feature-icon">🔄</div>
+                    <div class="feature-content">
+                        <h4>Auto-Organização</h4>
+                        <p>IA categoriza, taggeia e roteia informações automaticamente para lugar certo.</p>
+                    </div>
+                </div>
+
+                <div class="feature-item">
+                    <div class="feature-icon">📊</div>
+                    <div class="feature-content">
+                        <h4>Visibilidade Total</h4>
+                        <p>Dashboard sempre atualizado com métricas, progresso e saúde do sistema.</p>
+                    </div>
+                </div>
+
+                <div class="feature-item">
+                    <div class="feature-icon">🛡️</div>
+                    <div class="feature-content">
+                        <h4>Anti-Procrastinação</h4>
+                        <p>Detecta padrões de evitação e intervém antes que se torne um problema crônico.</p>
+                    </div>
+                </div>
+
+                <div class="feature-item">
+                    <div class="feature-icon">🔌</div>
+                    <div class="feature-content">
+                        <h4>Infinitamente Extensível</h4>
+                        <p>Nova API? Basta criar adapter. O engine absorve qualquer fonte de dados.</p>
+                    </div>
+                </div>
+
+                <div class="feature-item">
+                    <div class="feature-icon">🔐</div>
+                    <div class="feature-content">
+                        <h4>Privacidade First</h4>
+                        <p>Dados seus, regras suas. Você controla tudo. Nada sai sem permissão.</p>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Code Example Complete -->
+        <section id="usage">
+            <h2 class="section-title"><span class="icon">💻</span>Exemplo de Uso Completo</h2>
+            
+            <div class="card">
+                <div class="card-header">
+                    <div class="card-icon">🚀</div>
+                    <span class="card-status status-ready">Ready to Use</span>
+                </div>
+                <h3 class="card-title">Segundo Cérebro do Dia a Dia</h3>
+                <p class="card-desc">
+                    Exemplo real de como usar o engine nas principais situações do dia-a-dia.
+                </p>
+                
+                <div class="code-block" style="margin-top: 24px;">
+                    <div class="code-header">
+                        <span class="code-lang">Python • Uso Diário</span>
+                        <span class="copy-btn">Copiar Código Completo</span>
+                    </div>
+                    <pre><code><span class="comment">#!/usr/bin/env python3
+"""
+Exemplo de uso completo do Second Brain Engine
+Este script demonstra o fluxo diário típico
+"""
+
+<span class="keyword">import</span> sys
+<span class="keyword">import</span> json
+<span class="keyword">from</span> datetime <span class="keyword">import</span> datetime
+
+<span class="comment"># Importar componentes do engine</span>
+<span class="keyword">from</span> integrations.lex_flow_definitive <span class="keyword">import</span> LexFlowClient, LexFlowConfig
+<span class="keyword">from</span> engine.core_engine <span class="keyword">import</span> SecondBrainEngine
+<span class="keyword">from</span> engine.memory_system <span class="keyword">import</span> MemorySystem
+
+
+<span class="keyword">def</span> <span class="function">main</span>():
+    <span class="string">"""Fluxo principal do Segundo Cérebro"""</span>
+    
+    <span class="comment"># ============================================</span>
+    <span class="comment"># 1. INICIALIZAÇÃO</span>
+    <span class="comment"># ============================================</span>
+    
+    <span class="print">"\n" + "="*60</span>
+    <span class="print">"🧠 SEGUNDO CÉREBRO INICIALIZANDO..."</span>
+    <span class="print">("="*60 + "\n")</span>
+    
+    <span class="comment"># Configurar Lex Flow (já testado e funcionando!)</span>
+    lex_config = <span class="function">LexFlowConfig</span>(
+        username=<span class="string">"Lex-Usamn"</span>,
+        password=<span class="string">"Lex#157."</span>,
+        base_url=<span class="string">"https://flow.lex-usamn.com.br"</span>
+    )
+    
+    <span class="comment"># Criar cliente Lex Flow</span>
+    lf = <span class="function">LexFlowClient</span>(lex_config)
+    
+    <span class="comment"># Inicializar Memory System (arquivos Obsidian)</span>
+    memory = <span class="function">MemorySystem</span>(
+        vault_path=<span class="string">"./SecondBrain_Ultimate"</span>
+    )
+    
+    <span class="comment"># Carregar identidade e perfil</span>
+    soul = memory.<span class="function">load_soul</span>()     <span class="comment"># Quem é o Second Brain</span>
+    user = memory.<span class="function">load_user</span>()     <span class="comment"> Seu perfil operacional</span>
+    
+    <span class="print">✅ Identidade carregada:</span>
+    <span class="print">"   Propósito:", soul.get(<span class="string">'purpose'</span>)[:<span class="string">60</span>] + <span class="string">"...")</span>
+    <span class="print">"   Usuário:", user.get(<span class="string">'username'</span>)</span>
+    
+    <span class="comment"># Inicializar Engine principal</span>
+    brain = <span class="function">SecondBrainEngine</span>(
+        lex_flow=lf,
+        memory=memory,
+        config={
+            <span class="string">'debug'</span>: <span class="keyword">True</span>,
+            <span class="string">'auto_process_inbox'</span>: <span class="keyword">True</span>
+        }
+    )
+    
+    <span class="print">"\n✅ SISTEMA PRONTO!\n")</span>
+
+
+    <span class="comment"># ============================================</span>
+    <span class="comment"># 2. BRIEFING MATINAL (O que fazer hoje?)</span>
+    <span class="comment"># ============================================</span>
+    
+    <span class="print">("🌅 BRIEFING MATINAL".center(<span class="string">50</span>, <span class="string">"-"</span>))</span>
+    
+    <span class="comment"># Obter prioridades do Lex Flow</span>
+    priorities = lf.<span class="function">get_today_priorities</span>()
+    stats = lf.<span class="function">get_today_stats</span>()
+    
+    <span class="comment"># Enriquecer com IA (Decision Engine)</span>
+    morning_context = {
+        <span class="string">'time_of_day'</span>: <span class="string">'morning'</span>,
+        <span class="string">'energy_level'</span>: user.get(<span class="string">'morning_energy'</span>, <span class="string">'medium'</span>),
+        <span class="string">'priorities_lex'</span>: priorities,
+        <span class="string">'stats'</span>: stats,
+        <span class="string">'goals_focus'</span>: [<span class="string">"Canais Dark"</span>, <span class="string">"Influencer"</span>]
+    }
+    
+    suggestion = brain.<span class="function">suggest_morning_plan</span>(morning_context)
+    
+    <span class="print">("\n🎯 TOP 3 PRIORIDADES DE HOJE:")</span>
+    <span class="keyword">for</span> i, item <span class="keyword">in</span> <span class="function">enumerate</span>(suggestion[<span class="string">'top_3'</span>], <span class="number">1</span>):
+        <span class="print">(f"   {i}. [{item['project']}] {item['task']}")</span>
+        <span class="print">(f"      ⏱️  Estimado: {item['estimated_time']} | 🎯 Porquê: {item['reason']}")</span>
+    
+    <span class="print">("\n💡 INSIGHT DO DIA:")</span>
+    <span class="print">(f"   {suggestion['daily_insight']}")</span>
+
+
+    <span class="comment"># ============================================</span>
+    <span class="comment"># 3. CAPTURA RÁPIDA (Durante o dia)</span>
+    <span class="comment"># ============================================</span>
+    
+    <span class="print">("\n📥 CAPTURA DE IDEIA (Exemplo)".center(<span class="string">50</span>, <span class="string">"-"</span>))</span>
+    
+    <span class="capturar uma ideia que veio à cabeça</span>
+    captured = brain.<span class="function">quick_capture</span>(
+        idea=<span class="string">"Vídeo dark: Os 7 hospitais abandonados mais assustadores do Brasil"</span>,
+        source=<span class="string">'thought'</span>,
+        context={<span class="string">'type'</span>: <span class="string">'video_idea'</span>, <span class="string">'niche'</span>: <span class="string">'dark'</span>}
+    )
+    
+    <span class="if captured:</span>
+        <span class="print">("\n✅ IDEIA CAPTURADA!")</span>
+        <span class="print">(f"   📍 ID: {captured['note_id']}")</span>
+        <span class="print">(f"   📁 Local: {captured['location']}")</span>
+        <span class="print">(f"   🏷️  Tags: {', '.join(captured['tags'])}")</span>
+        
+        <span class="if captured.get('suggested_project'):</span>
+            <span class="print">(f"   💡 Sugestão: Mover para '{captured['suggested_project']}'")</span>
+    
+
+    <span class="comment"># ============================================</span>
+    <span class="comment"># 4. HEARTBEAT CHECK (Monitoramento)</span>
+    <span class="comment"># ============================================</span>
+    
+    <span class="print">("\n💓 HEARTBEAT CHECK".center(<span class="string">50</span>, <span class="string">"-"</span>))</span>
+    
+    heartbeat_report = brain.<span class="function">run_heartbeat_check</span>()
+    
+    <span class="print">("\n📊 STATUS DO SISTEMA:")</span>
+    <span class="print">(f"   Projetos ativos: {heartbeat_report['projects_active']}/{heartbeat_report['projects_total']}")</span>
+    <span class="print">(f"   Itens no Inbox: {heartbeat_report['inbox_size']}")</span>
+    <span class="print">(f"   Projetos parados: {len(heartbeat_report['stalled_projects'])}")</span>
+    
+    <span class="if heartbeat_report['alerts']:</span>
+        <span class="print">("\n⚠️  ALERTAS DETECTADOS:")</span>
+        <span class="keyword">for</span> alert <span class="keyword">in</span> heartbeat_report[<span class="string">'alerts'</span>]:
+            <span class="print">(f"   [{alert['level'].upper()}] {alert['message']}")</span>
+            <span class="print">(f"      → Ação: {alert['suggested_action']}")</span>
+    <span class="else:</span>
+        <span class="print">("\n✅ Tudo OK! Nenhum alerta.")</span>
+
+
+    <span class="comment"># ============================================</span>
+    <span class="comment"># 5. PROCESSAMENTO DO INBOX (Fim do dia)</span>
+    <span class="comment"># ============================================</span>
+    
+    <span class="print">("\n📥 PROCESSANDO INBOX".center(<span class="string">50</span>, <span class="string">"-"</span>))</span>
+    
+    processing_result = brain.<span class="function">process_inbox_with_ai</span>()
+    
+    <span class="print">("\n📋 RESULTADO DO PROCESSAMENTO:")</span>
+    <span class="print">(f"   Notas processadas: {processing_result['processed_count']}")</span>
+    <span class="print">(f"   Movidas para projetos: {processing_result['moved_to_projects']}")</span>
+    <span class="print">(f"   Arquivadas: {processing_result['archived']}")</span>
+    <span class="print">(f"   Ainda pendentes: {processing_result['remaining']}")</span>
+    
+    <span class="if processing_result.get('categorization'):</span>
+        <span class="print">("\n🤖 CATEGORIZAÇÃO IA:")</span>
+        <span class="keyword">for</span> cat <span class="keyword">in</span> processing_result[<span class="string">'categorization'</span>]:
+            <span class="print">(f"   • '{cat['item']}' → {cat['suggested_area']}")</span>
+
+
+    <span class="comment"># ============================================</span>
+    <span class="comment"># 6. ATUALIZAR MEMÓRIA (Learning)</span>
+    <span class="comment"># ============================================</span>
+    
+    <span class="print">("\n💾 ATUALIZANDO MEMÓRIA...".center(<span class="string">50</span>, <span class="string">"-"</span>))</span>
+    
+    <span class="Registrar lições do dia</span>
+    memory.<span class="function">add_lesson</span>(
+        category=<span class="string">'Geral'</span>,
+        lesson=<span class="string">'Teste: Captura via thought funciona bem para ideias espontâneas'</span>,
+        context=<span class="string">'Captura rápida teste matinal'</span>
+    )
+    
+    <span class="Atualizar métricas</span>
+    memory.<span class="function">update_metrics</span>({
+        <span class="string">'date'</span>: datetime.now().<span class="function">strftime</span>(<span class="string">'%Y-%m-%d'</span>),
+        <span class="string">'ideas_captured'</span>: <span class="number">1</span>,
+        <span class="string">'inbox_processed'</span>: processing_result[<span class="string">'processed_count'</span>],
+        <span class="string">'heartbeats_run'</span>: <span class="number">1</span>
+    })
+    
+    <span class="print">("✅ Memória atualizada!")</span>
+
+
+    <span class="comment"># ============================================</span>
+    <span class="comment"># 7. RESUMO FINAL</span>
+    <span class="comment"># ============================================</span>
+    
+    <span class="print">("\n" + "="*60)</span>
+    <span class="print">("📊 RESUMO DA SESSÃO".center(<span class="string">56</span>))</span>
+    <span class="print">("="*60)</span>
+    
+    summary = brain.<span class="function">generate_session_summary</span>()
+    
+    <span class="print">("\n📈 Métricas da Sessão:")</span>
+    <span class="keyword">for</span> key, value <span class="keyword">in</span> summary.items():
+        <span class="print">(f"   • {key}: {value}")</span>
+    
+    <span class="print">("\n🎯 Próximos Passos Sugeridos:")</span>
+    next_steps = brain.<span class="function">suggest_next_steps</span>()
+    <span class="keyword">for</span> step <span class="keyword">in</span> next_steps[:<span class="number">3</span>]:
+        <span class="print">(f"   → {step}")</span>
+    
+    <span class="print">("\n" + "="*60)</span>
+    <span class="print">("🧠 SEGUNDO CÉREBRO ENCERRADO COM SUCESSO".center(<span class="string">54</span>))</span>
+    <span class="print">("="*60 + "\n")</span>
+
+
+<span class="keyword">if</span> __name__ == <span class="string">"__main__"</span>:
+    <span class="function">main</span>()
+</code></pre>
+                </div>
+            </div>
+        </section>
+
+        <!-- Next Steps -->
+        <section id="next">
+            <div class="card" style="background: linear-gradient(135deg, rgba(59, 130, 246, 0.08), rgba(139, 92, 246, 0.08)); border-color: rgba(59, 130, 246, 0.3);">
+                <h3 class="card-title" style="font-size: 22px;">🚀 Próximos Passos Imediatos</h3>
+                <p class="card-desc" style="font-size: 16px;">
+                    Enquanto você verifica as outras APIs, aqui está o que pode fazer AGORA com o Módulo 2:
+                </p>
+                
+                <div class="feature-grid" style="margin-top: 24px;">
+                    <div class="feature-item" style="background: rgba(0,0,0,0.2);">
+                        <div class="feature-icon">📁</div>
+                        <div class="feature-content">
+                            <h4>1. Criar Estrutura de Pastas</h4>
+                            <p>Crie a pasta <code style="color: var(--accent-cyan);">engine/</code> com todos os submódulos listados acima.</p>
+                        </div>
+                    </div>
+                    
+                    <div class="feature-item" style="background: rgba(0,0,0,0.2);">
+                        <div class="feature-icon">📝</div>
+                        <div class="feature-content">
+                            <h4>2. Copiar Código Core</h4>
+                            <p>Copie o código Python que vou gerar para cada arquivo do engine.</p>
+                        </div>
+                    </div>
+                    
+                    <div class="feature-item" style="background: rgba(0,0,0,0.2);">
+                        <div class="feature-icon">⚡</div>
+                        <div class="feature-content">
+                            <h4>3. Testar com Lex Flow</h4>
+                            <p>Rode o exemplo de uso completo e veja tudo funcionando junto.</p>
+                        </div>
+                    </div>
+                    
+                    <div class="feature-item" style="background: rgba(0,0,0,0.2);">
+                        <div class="feature-icon">🔌</div>
+                        <div class="feature-content">
+                            <h4>4. Preparar para Novas APIs</h4>
+                            <p>O engine está pronto para receber YouTube API, Instagram, ou qualquer outra!</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <footer>
+            <p>🧠 Second Brain Ultimate • Módulo 2: Engine • Construído com ❤️ para Tech Creators</p>
+            <p style="margin-top: 8px; opacity: 0.6;">
+                Baseado em Lex Flow + Claude AI + Methodology Dynamous AI Bootcamp
+            </p>
+        </footer>
+    </div>
+
+    <script>
+        // Copy button functionality
+        document.querySelectorAll('.copy-btn').forEach(btn => {
+            btn.addEventListener('click', function() {
+                const codeBlock = this.closest('.code-block').querySelector('code');
+                const text = codeBlock.textContent;
+                
+                navigator.clipboard.writeText(text).then(() => {
+                    this.textContent = 'Copiado!';
+                    setTimeout(() => {
+                        this.textContent = 'Copiar';
+                    }, 2000);
+                });
+            });
+        });
+
+        // Smooth scroll for anchor links
+        document.querySelectorAll('a[href^="#"]').forEach(anchor => {
+            anchor.addEventListener('click', function(e) {
+                e.preventDefault();
+                const target = document.querySelector(this.getAttribute('href'));
+                if (target) {
+                    target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                }
+            });
+        });
+    </script>
+</body>
+</html>

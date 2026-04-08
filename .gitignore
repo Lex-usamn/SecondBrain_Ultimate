@@ -1,0 +1,23 @@
+# Ambientes virtuais
+venv/
+env/
+.env
+
+# Arquivos compilados do Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Arquivos de log local e dados de banco (evitar vazar no github)
+logs/
+*.log
+data/
+*.sqlite3
+*.db
+
+# Arquivos do MacOS
+.DS_Store
+
+# Diretórios específicos do IDE
+.vscode/
+.idea/

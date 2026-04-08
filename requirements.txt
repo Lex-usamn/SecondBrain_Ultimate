@@ -1,0 +1,28 @@
+# Segundo Cérebro Ultimate - Dependências Python
+# =============================================
+
+# HTTP Requests (obrigatório para Lex Flow API)
+requests>=2.31.0
+
+# Manipulação de dados JSON avançada
+python-dotenv>=1.0.0
+
+# Manipulação de datas e horários
+python-dateutil>=2.8.2
+
+# Logging colorido (opcional, mas ajuda)
+colorlog>=6.7.0
+
+# Para futuras features (busca vetorial, embeddings)
+# Descomentar quando necessário:
+
+# fastembed>=0.3.0          # Embeddings locais (busca semântica)
+# sqlite-vec>=0.1.0         # Vector search em SQLite
+# anthropic>=0.18.0          # SDK oficial Anthropic Claude
+# google-generativeai>=0.3.0 # SDK Google Gemini
+
+# Para Telegram Bot (futuro)
+# python-telegram-bot>=20.7
+
+# Para Discord Bot (futuro)  
+# discord.py>=2.3.0
