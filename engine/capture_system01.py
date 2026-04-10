@@ -13,14 +13,14 @@ MUDANÇAS NA VERSÃO 2.0:
 
 FUNCIONALIDADES PRINCIPAIS:
 - Quick capture (texto, voz, imagem)
-- Categorização automática via IA
+- Categorização automática via inteligência artificial
 - Deduplicação inteligente
-- Roteamento para projetos certos
+- Roteamento para projetos corretos
 - Tags e metadados automáticos
-- Multi-canal (CLI, Telegram, Discord, Web)
+- Multi-canal (linha de comando, Telegram, Discord, Web)
 
 AUTOR: Second Brain Ultimate System
-VERSÃO: 2.0 (Integração Lex Flow)
+VERSÃO: 2.0.0 (Integração Lex Flow)
 DATA: 2026-04-08
 STATUS: ✅ Produção (Testado e aprovado)
 """
@@ -35,6 +35,10 @@ from datetime import datetime
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass, field
 from enum import Enum
+
+# ============================================
+# IMPORTAÇÕES DOS MÓDULOS DO SISTEMA
+# ============================================
 
 try:
     from .memory_system import MemorySystem
@@ -94,10 +98,10 @@ class CaptureType(Enum):
     Usado para roteamento automático e templates.
     """
     
-    IDEA = "idea"                 # Ideia geral (ainda não é ação clara)
+    IDEA = "idea"                 # Ideia geral (ainda não é ação)
     TASK = "task"                 # Tarefa acionável (tem próximo passo claro)
-    NOTE = "note"                  # Nota/informação pura (referência para ler depois)
-    REFERENCE = "reference"           # Link/referência externa (URL, livro, artigo)
+    NOTE = "note"                  # Nota/informação pura (referência)
+    REFERENCE = "reference"           # Link/referência externa (URL, livro)
     QUICK_CAPTURE = "quick_capture"      # Captura ultra-rápida (sem categorizar ainda)
     MEETING_NOTE = "meeting_note"       # Nota de reunião (pontos de decisão)
     CONTENT_DRAFT = "draft"              # Rascunho de conteúdo (vídeo, post, artigo)
@@ -112,11 +116,11 @@ class CapturePriority(Enum):
     posteriormente pelo Decision Engine.
     """
     
-    CRITICAL = "critical"         # Crítico (precisa atenção IMEDIATA - fazer agora!)
-    HIGH = "high"               # Alta (fazer hoje sem falta, importante)
-    MEDIUM = "medium"             # Média (esta semana, importante mas não urgente)
-    LOW = "low"                 # Baixa (quando tiver tempo disponível, pode esperar)
-    SOMEDAY = "someday"         # Futuro (talvez um dia, não agora, talvez nunca)
+    CRITICAL = "critical"         # Crítico (precisa atenção IMEDIATA)
+    HIGH = "high"               # Alta (fazer hoje sem falta)
+    MEDIUM = "medium"             # Média (esta semana)
+    LOW = "low"                 # Baixa (quando tiver tempo disponível)
+    SOMEDAY = "someday"         # Futuro (talvez um dia, não agora)
 
 
 class CaptureStatus(Enum):
@@ -127,12 +131,12 @@ class CaptureStatus(Enum):
     cada item capturado se encontra.
     """
     
-    NEW = "new"                   # Recém criada (acabou de entrar no sistema)
-    PROCESSING = "processing"           # Sendo processada (análise em andamento pela IA)
-    CATEGORIZED = "categorized"         # Categorizada (já sabe para qual projeto/área vai)
-    CONVERTED_TO_TASK = "converted_to_task" # Convertida em tarefa de projeto (deixou de ser ideia solta)
-    ARCHIVED = "archived"              # Arquivada (não é mais relevante ativamente, foi concluída ou cancelada)
-    DELETED = "deleted"              # Deletada (removida permanentemente pelo usuário)
+    NEW = "new"                   # Recém criada (acabou de entrar)
+    PROCESSING = "processing"           # Sendo processada (análise em andamento)
+    CATEGORIZED = "categorized"         # Categorizada (já sabe para onde ir)
+    CONVERTED_TO_TASK = "converted_to_task" # Convertida em tarefa de projeto
+    ARCHIVED = "archived"              # Arquivada (não é mais relevante ativamente)
+    DELETED = "deleted"              # Deletada (removida permanentemente)
 
 
 # ============================================
@@ -147,79 +151,79 @@ class CaptureItem:
     É o formato interno normalizado usado pelo sistema antes de
     enviar para o Lex Flow ou processar com inteligência artificial.
     
-    ATRIBUTOS PRINCIPAIS:
-        - content: O texto/idea original capturada
+    Atributos Principais:
+        - content: O texto/ideia original capturada
         - source: De onde veio (Telegram, manual, voz, etc.)
         - type: Que tipo de conteúdo é (idea, task, note, etc.)
         - priority: Quão urgente é inicialmente
         
-    ATRIBUTOS ENRIQUECIDOS (PÓS-PROCESSAMENTO PELA IA):
-        - suggested_project: Para qual projeto a IA sugeriu enviar como destino
-        - suggested_category: Categoria P.A.R.A. sugerida (Projects/Areas/Resources/Archives)
-        - confidence_score: Quão confiante está a sugestão (0.0 = chute aleatório, 1.0 = certeza absoluta)
+    Atributos Enriquecidos (pós-processamento):
+        - suggested_project: Para qual projeto a IA sugeriu enviar
+        - suggested_category: Categoria sugerida (P.A.R.A.)
+        - confidence_score: Quão confiante está a sugestão (0.0 a 1.0)
     """
     
     # Identificação única
-    id: str = ""                          # ID único gerado automaticamente (formato: {source}_{timestamp}_{hash})
-    content: str = ""                      # Conteúdo original capturado (pode ter qualquer tamanho)
+    id: str = ""                          # Identificador único gerado automaticamente
+    content: str = ""                      # Conteúdo original capturado
     
     # Classificação inicial
-    source: CaptureSource = CaptureSource.THOUGHT     # Origem desta captura
+    source: CaptureSource = CaptureSource.THOUGHT     # Origem da captura
     type: CaptureType = CaptureType.IDEA             # Tipo semântico do conteúdo
-    priority: CapturePriority = CapturePriority.MEDIUM # Prioridade inicial atribuída
+    priority: CapturePriority = CapturePriority.MEDIUM # Prioridade inicial
     
     # Metadados
-    tags: List[str] = field(default_factory=list)     # Tags manuais ou automáticas (para busca/filtragem)
-    metadata: Dict = field(default_factory=dict)       # Metadados extras (flexível, aceita qualquer chave-valor)
+    tags: List[str] = field(default_factory=list)     # Tags manuais ou automáticas
+    metadata: Dict = field(default_factory=dict)       # Metadados extras (flexível)
     
     # Controle de ciclo de vida
-    created_at: str = ""                   # Timestamp de criação (formato ISO 8601: YYYY-MM-DDTHH:MM:SS.ffffff)
-    processed: bool = False                # Já foi processado pelo Decision Engine (IA)?
-    processing_result: Dict = None         # Resultado do processamento (se houver, dict com detalhes)
+    created_at: str = ""                   # Timestamp de criação (ISO 8601)
+    processed: bool = False                # Já foi processado pelo Decision Engine?
+    processing_result: Dict = None         # Resultado do processamento (se houver)
     
     # Dados enriquecidos pela inteligência artificial (após análise)
-    suggested_project: str = None          # Nome/ID do projeto sugerido como destino final
-    suggested_category: str = None         # Categoria P.A.R.A. sugerida (Projects / Areas / Resources / Archives)
-    confidence_score: float = 0.0          # Nível de confiança da sugestão da IA (0.0 a 1.0)
-    duplicates: List[str] = field(default_factory=list)  # Lista de IDs de itens duplicados encontrados (se houver)
+    suggested_project: str = None          # Nome/ID do projeto sugerido como destino
+    suggested_category: str = None         # Categoria P.A.R.A. sugerida (Projects/Areas/Resources/Archives)
+    confidence_score: float = 0.0          # Nível de confiança da sugestão (0.0 = chute, 1.0 = certeza)
+    duplicates: List[str] = field(default_factory=list)  # Lista de IDs de itens duplicados encontrados
     
     def __post_init__(self):
         """
-        Inicialização pós-criação do objeto (chamado pelo Python após __init__)
+        Inicialização pós-criação do objeto
         
-        Gera automaticamente ID único e timestamp se não fornecidos.
-        Este método é chamado pelo dataclass decorator automaticamente.
+        Gera automaticamente ID e timestamp se não fornecidos.
+        Este método é chamado pelo Python após __init__.
         """
         if not self.id:
-            self.id = self._gerar_id_unico()
+            self.id = self._generate_unique_id()
             self.created_at = datetime.now().isoformat()
     
-    def _gerar_id_unico(self) -> str:
+    def _generate_unique_id(self) -> str:
         """
         Gera identificador único baseado no conteúdo e timestamp
         
         Usa hash SHA-256 do conteúdo + origem + timestamp para garantir
         unicidade mesmo se capturadas ideias idênticas no mesmo segundo.
         
-        RETORNA:
-            String com formato: {origem}_{timestamp}_{hash_8_caracteres}
+        Returns:
+            String com formato: {origem}_{timestamp}_{hash_8_chars}
         """
-        conteudo_hash = hashlib.sha256(
+        content_hash = hashlib.sha256(
             f"{self.source.value}{self.content}{self.created_at}".encode()
         ).hexdigest()[:8]
         
         timestamp = datetime.now().strftime('%Y%m%d%H%M%S')
-        return f"{self.source.value}_{timestamp}_{conteudo_hash}"
+        return f"{self.source.value}_{timestamp}_{content_hash}"
     
-    def para_dicionario(self) -> Dict:
+    def to_dictionary(self) -> Dict:
         """
-        Converte objeto para dicionário (formato compatível com Lex Flow API)
+        Converte objeto para dicionário (formato compatível com Lex Flow)
         
         Prepara os dados para serem enviados como payload JSON
         para a API do Lex Flow via add_note() ou quick_capture().
         
-        RETORNA:
-            Dicionário com todos os campos serializáveis (pronto para json.dumps)
+        Returns:
+            Dicionário com todos os campos serializáveis
         """
         return {
             'id': self.id,
@@ -246,19 +250,19 @@ class CaptureResult:
     Retornado por todos os métodos de captura para indicar sucesso/fracasso
     e fornecer detalhes sobre o que aconteceu.
     
-    ATRIBUTOS:
-        - success: Se a operação foi bem-sucedida (True/False)
-        - item: O objeto CaptureItem que foi criado/tentado (mesmo se falhar, para debug)
-        - message: Mensagem legível por humano explicando o resultado
-        - action_taken: Descrição do que foi executado ("created", "duplicate_ignored", etc.)
-        - errors: Lista de erros (se houveram múltiplos, vazia se sucesso)
+    Atributos:
+        - success: Se a operação foi bem-sucedida
+        - item: O objeto CaptureItem que foi criado/tentado
+        - message: Mensagem legível por humano sobre o resultado
+        - action_taken: Qual ação foi executada (criar, ignorar duplicata, etc.)
+        - errors: Lista de erros (se houveram múltiplos)
     """
     
     success: bool = False                     # Operação concluída com sucesso?
-    item: CaptureItem = None                  # Item que foi processado (para referência futura)
-    message: str = ""                         # Mensagem descritiva do resultado (explicativa)
-    action_taken: str = ""                    # Qual ação específica foi executada
-    errors: List[str] = field(default_factory=list)  # Lista de erros encontrados (vazia se tudo OK)
+    item: CaptureItem = None                  # Item que foi processado
+    message: str = ""                         # Mensagem descritiva do resultado
+    action_taken: str = ""                    # Ação específica executada
+    errors: List[str] = field(default_factory=list)  # Lista de erros encontrados
 
 
 @dataclass
@@ -269,19 +273,19 @@ class BatchCaptureResult:
     Usado quando múltiplos itens são importados de uma vez
     (ex: arquivo CSV, backup, migração de outro sistema).
     
-    ATRIBUTOS:
+    Atributos:
         - total_submitted: Quantos itens foram tentados
         - successful: Quantos tiveram sucesso
         - failed: Quantos falharam
-        - items: Lista de todos os CaptureItem (sucesso + falha)
+        - items: Lista de todos os CaptureItem criados
         - errors: Mensagens de erro dos que falharam
     """
     
-    total_submitted: int = 0                 # Total de itens tentados no lote
-    successful: int = 0                       # Quantos foram criados com sucesso no Lex Flow
-    failed: int = 0                           # Quantos falharam (erro de validação, API, etc.)
-    items: List[CaptureItem] = field(default_factory=list)  # Todos os itens (tanto os que deram certo quanto errado)
-    errors: List[str] = field(default_factory=list)        # Mensagens de erro detalhadas dos que falharam
+    total_submitted: int = 0                 # Total de itens tentados
+    successful: int = 0                       # Quantos foram criados com sucesso
+    failed: int = 0                           # Quantos falharam
+    items: List[CaptureItem] = field(default_factory=list)  # Todos os itens (sucesso + falha)
+    errors: List[str] = field(default_factory=list)        # Mensagens de erro
 
 
 # ============================================
@@ -301,42 +305,50 @@ class CaptureSystem:
     --------------------------------
     Esta versão (2.0) está 100% integrada com o LexFlowClient real.
     Todas as operações de gravação usam a API do Lex Flow em produção.
-    Não há mais mocks, simulações ou banco de dados local alternativo.
+    Não há mais mocks, simulações ou dados falsos.
     
     EXEMPLOS DE USO BÁSICO:
-    -----------------------
+    ----------------------
     
-    # Inicialização (recebe cliente Lex Flow já conectado e autenticado)
-    sistema_captura = CaptureSystem(
-        lex_flow_client=cliente_lex_flow,
-        memory_system=sistema_memoria
+    # Inicialização (recebe cliente Lex Flow já conectado)
+    capture_system = CaptureSystem(lex_flow_client=meu_lex_flow, memory_system=minha_memoria)
+    
+    # Captura rápida de ideia (método principal!)
+    resultado = capture_system.quick_capture("Ideia incrível para vídeo sobre criptomoedas")
+    
+    # Captura com tags personalizadas
+    resultado = capture_system.quick_capture(
+        "Preciso comprar microfone melhor",
+        tags=["equipamento", "prioridade", "youtube"],
+        source="manual"
     )
     
-    # Capturas rápidas (métodos mais usados!)
-    resultado = sistema_captura.quick_capture("Minha ideia...")
-    resultado = sistema_captura.voice_note("Texto transcrito do áudio...")
-    resultado = sistema_captura.bulk_import([
+    # Capturar nota de voz já transcrita
+    resultado = capture_system.capture_voice_note(transcription_text="Texto transcrito do áudio...")
+    
+    # Importar múltiplas ideias de uma vez (ex: arquivo)
+    resultado_lote = capture_system.bulk_import([
         {"content": "Ideia 1", "source": "telegram"},
         {"content": "Ideia 2", "source": "thought"},
+        {"content": "Tarefa importante", "source": "email", "type": "task"}
     ])
     
-    # Processar inbox inteiro com IA
-    resultado = sistema_captura.processar_inbox_com_inteligencia()
+    # Processar inbox inteiro com IA (categorização automática)
+    resultado_processamento = capture_system.process_inbox_with_intelligence()
     
     # Buscar ideias anteriores por texto
-    resultados = sistema_captura.buscar_capturas("canais dark monetização")
+    resultados_busca = capture_system.search_captures("canais dark monetização")
     
     FLUXO INTERNO DE DADOS:
     -----------------------
+    
     [Input Externo] → [CaptureItem] → [Validação] → [Deduplicação] 
         → [Lex Flow API] → [Retorno CaptureResult]
     
-    ATRIBUTOS PRINCIPAIS DO OBJETO:
-    -----------------------------------
-    - lex_flow: Instância de LexFlowClient (conectada e autenticada - OBRIGATÓRIO)
-    - memory: Instância de MemorySystem (para contexto e histórico - OBRIGATÓRIO)
-    - deduplication_cache: Cache temporário para detectar duplicatas rápidas (evita chamadas à API repetidas)
-    - id_counter: Contador sequencial para geração de IDs (alternativo ao hash)
+    Atributos Principais do Objeto:
+        - lex_flow: Instância de LexFlowClient (conectada e autenticada)
+        - memory: Instância de MemorySystem (para contexto e histórico)
+        - deduplication_cache: Cache temporário para detectar duplicatas rápidas
     """
     
     def __init__(self, lex_flow_client: LexFlowClient, memory_system: MemorySystem):
@@ -345,38 +357,38 @@ class CaptureSystem:
         
         ARGUMENTOS OBRIGATÓRIOS:
             lex_flow_client: Instância de LexFlowClient já conectada e autenticada
-                           Deve estar pronta para fazer chamadas à API (login já feito)
-                           
+                           Deve estar pronta para fazer chamadas à API
+            
             memory_system: Instância de MemorySystem carregada
                           Fornece contexto histórico para decisões melhores
         
         LEVANTA EXCEÇÃO SE:
-            - lex_flow_client é None ou não é instância de LexFlowClient
-            - memory_system é None ou não é instância de MemorySystem
+            - lex_flow_client for None ou não for instância de LexFlowClient
+            - memory_system for None ou não for instância de MemorySystem
         
         EXEMPLO DE INICIALIZAÇÃO CORRETA:
             
             from integrations.lex_flow_definitivo import LexFlowClient, LexFlowConfig
             from engine.memory_system import MemorySystem
             
-            # Criar e conectar cliente Lex Flow (isso já faz login automático!)
+            # Criar e conectar cliente Lex Flow
             configuracao_lex_flow = LexFlowConfig(
                 username="Lex-Usamn",
-                password="Lex#157."
+                password="senha_secreta"
             )
             cliente_lex_flow = LexFlowClient(configuracao_lex_flow)
             
             # Carregar sistema de memória
             sistema_memoria = MemorySystem()
             
-            # Inicializar capture system com as duas dependências
-            captura = CaptureSystem(
+            # Inicializar capture system
+            capture = CaptureSystem(
                 lex_flow_client=cliente_lex_flow,
                 memory_system=sistema_memoria
             )
         """
         
-        # Validação rigorosa das dependências (NÃO ACEITA None ou tipos errados!)
+        # Validação rigorosa das dependências
         if lex_flow_client is None:
             raise ValueError(
                 "ERRO CRÍTICO: CaptureSystem PRECISA de um LexFlowClient válido! "
@@ -401,38 +413,38 @@ class CaptureSystem:
                 f"mas recebeu {type(memory_system).__name__}"
             )
         
-        # Armazenar referências às dependências (usadas em TODOS os métodos)
+        # Armazenar referências às dependências (usadas em todos os métodos)
         self.lex_flow = lex_flow_client
         self.memory = memory_system
         
-        # Cache interno para detecção rápida de duplicatas (otimização)
+        # Cache interno para detecção rápida de duplicatas (evita chamadas à API)
         # Estrutura: {hash_conteudo: id_item_existente}
-        self._cache_deduplicacao: Dict[str, str] = {}
+        self._deduplication_cache: Dict[str, str] = {}
         
         # Contador sequencial para geração de IDs (alternativo ao hash)
-        self._contador_ids: int = 0
+        self._id_counter: int = 0
         
         # Log de inicialização bem-sucedida
-        log.info("=" * 80)
+        log.info("=" * 70)
         log.info("📥 CAPTURE SYSTEM v2.0 INICIALIZADO (Integração Lex Flow Ativa)")
         log.info(f"   Cliente Lex Flow: {type(lex_flow_client).__name__}")
         log.info(f"   Sistema de Memória: {type(memory_system).__name__}")
         log.info(f"   Status: ✅ Pronto para capturas em produção")
-        log.info("=" * 80)
+        log.info("=" * 70)
     
-    def _gerar_id_sequencial(self) -> str:
+    def _generate_sequential_id(self) -> str:
         """
         Gera identificador sequencial simples para captures
         
-        Alternativa ao _gerar_id_unico() baseado em hash.
+        Alternativa ao _generate_unique_id() baseado em hash.
         Formato: CAP-{YYYYMMDD}-{HHMMSS}-{NNNN}
         
-        RETORNA:
+        Returns:
             String com ID sequencial único
         """
-        self._contador_ids += 1
+        self._id_counter += 1
         timestamp_atual = datetime.now().strftime('%Y%m%d-%H%M%S')
-        return f"CAP-{timestamp_atual}-{self._contador_ids:04d}"
+        return f"CAP-{timestamp_atual}-{self._id_counter:04d}"
     
     # ========================================
     # MÉTODOS DE CAPTURA PRINCIPAIS (API PÚBLICA)
@@ -456,18 +468,18 @@ class CaptureSystem:
         1. Criar objeto CaptureItem com os dados fornecidos
         2. Validar conteúdo mínimo (não pode estar vazio)
         3. Verificar se é duplicata de algo já capturado
-        4. Enviar para Lex Flow via API REAL (quick_capture ou add_note)
+        4. Enviar para Lex Flow via API real (quick_capture ou add_note)
         5. Retornar CaptureResult com sucesso/erro
         
         ARGUMENTOS:
-            idea: Texto da idea/nota (OBRIGATÓRIO, não pode ser vazio)
-                  Pode ter qualquer tamanho (curto ou longo, até ~50000 chars)
+            idea: Texto da ideia/nota (OBRIGATÓRIO, não pode ser vazio)
+                  Pode ter qualquer tamanho (curto ou longo)
                   
             source: Origem desta captura (padrão: "manual")
                     Valores válidos: "manual", "telegram", "discord", 
                                       "voice", "thought", "api", "web", "bulk"
                     
-            tags: Lista opcional de tags para categorização manual
+            tags: Lista de tags opcionais para categorização manual
                   Exemplo: ["youtube", "dark", "criptomoeda", "urgente"]
                   
             priority: Nível de prioridade inicial (padrão: MEDIUM)
@@ -481,16 +493,16 @@ class CaptureSystem:
             - success: True se capturada com sucesso, False caso contrário
             - item: Objeto CaptureItem criado (mesmo se falhar, para debug)
             - message: Mensagem legível explicando o resultado
-            - action_taken: Descrição do que foi feito ("created_in_lex_flow", etc.)
+            - action_taken: Descrição do que foi feito ("created", "duplicate_ignored", etc.)
             - errors: Lista de erros (vazia se sucesso)
         
         EXEMPLOS DE USO:
         
         # Simples
-        resultado = captura.quick_capture("Comprar pão na padaria")
+        resultado = capture.quick_capture("Comprar pão na padaria")
         
         # Com tags e prioridade
-        resultado = captura.quick_capture(
+        resultado = capture.quick_capture(
             "Ideia de vídeo: Top 5 moedas criptográficas para 2026",
             tags=["youtube", "criptomoeda", "canal-dark"],
             source="thought",
@@ -505,18 +517,18 @@ class CaptureSystem:
         """
         
         log.info(f"📥 Iniciando Quick Capture...")
-        log.info(f"   Conteúdo (primeiros 80 caracteres): {idea[:80]}...")
+        log.info(f"   Conteúdo (primeiros 80 chars): {idea[:80]}...")
         log.info(f"   Origem: {source}")
         log.info(f"   Tags fornecidas: {tags or []}")
         
         # PASSO 1: Criar objeto CaptureItem (representação interna normalizada)
         try:
             # Converter string de source para enum CaptureSource se necessário
-            origem_enum = CaptureSource(source) if isinstance(source, str) else CaptureSource.MANUAL
+            source_enum = CaptureSource(source) if isinstance(source, str) else CaptureSource.MANUAL
             
             item_capturado = CaptureItem(
                 content=idea,
-                source=origem_enum,
+                source=source_enum,
                 type=CaptureType.IDEA,
                 priority=priority,
                 tags=tags or [],
@@ -547,9 +559,9 @@ class CaptureSystem:
                 errors=["empty_content"]
             )
         
-        # Validar tamanho máximo razoável (proteção contra abuso)
+        # Validar tamanho máximo razoável (proteção contra abuse)
         if len(item_capturado.content) > 50000:  # 50KB limite generoso
-            log.warning(f"⚠️  Captura muito longa: {len(item_capturado.content)} caracteres")
+            log.warning(f"⚠️  Captura muito longa: {len(item_capturado.content)} chars")
             return CaptureResult(
                 success=False,
                 item=item_capturado,
@@ -559,10 +571,10 @@ class CaptureSystem:
             )
         
         # PASSO 3: Verificar duplicata (otimização para evitar gravar repetidos)
-        if self._eh_duplicata(item_capturado):
-            log.info("♻️  Duplicata detectada, ignorando capture")
+        if self._is_duplicate_item(item_capturado):
+            log.info(f"♻️  Duplicata detectada, ignorando capture")
             return CaptureResult(
-                success=True,  # Não é erro, apenas ignorou silenciosamente
+                success=True,  # Não é erro, apenas ignorou
                 item=item_capturado,
                 message="Esta ideia parece ser uma duplicata de algo já capturado recentemente. Ignorando.",
                 action_taken="duplicate_ignored",
@@ -574,142 +586,28 @@ class CaptureSystem:
             log.info(f"📤 Enviando para Lex Flow API...")
             
             # Preparar tags para o Lex Flow (garantir lista vazia se None)
-            tags_para_api = item_capturado.tags or ['capturada']  # Tag padrão se nenhuna fornecida
+            tags_para_api = item_capturado.tags or ['capturada']  # Tag padrão se nenhuma fornecida
             
-            # CHAMADA REAL À API DO LEX FLOW (usando o cliente já autenticado!)
+            # CHAMADA REAL À API DO LEX FLOW
             resultado_api = self.lex_flow.quick_capture(
                 idea=item_capturado.content,
                 tags=tags_para_api
             )
             
-            # ================================================================
-            # 🔍 NOVO: LOGGING DIAGNÓSTICO DA RESPOSTA BRUTA
-            # ================================================================
-            log.info(f"📦 RESPOSTA BRUTA DO LEX FLOW API:")
-            log.info(f"   Tipo: {type(resultado_api)}")
-            log.info(f"   Conteúdo: {resultado_api}")
-            if isinstance(resultado_api, dict):
-                log.info(f"   Chaves disponíveis: {list(resultado_api.keys())}")
-            # ================================================================
-            
-            # ================================================================
-            # ✅ NOVO: EXTRAÇÃO FLEXÍVEL DE ID (MULTI-FORMATO - ATUALIZADO v2.1)
-            # ================================================================
-            id_extraido = None
-            sucesso_flag = False
-            
-            if resultado_api:
-                # Tentativa 1: Formato direto padrão (múltiplos nomes possíveis de campo)
-                if isinstance(resultado_api, dict):
-                    id_extraido = (
-                        resultado_api.get('id') or
-                        resultado_api.get('note_id') or
-                        resultado_api.get('_id') or
-                        resultado_api.get('noteId') or
-                        None
-                    )
-                    
-                    # ✅ NOVO: Tentativa 1.5 - Objeto aninhado em 'note' (FORMATO REAL DO LEX FLOW!)
-                    # O Lex Flow retorna: {'note': {'id': 8, 'content': '...', ...}}
-                    if not id_extraido and 'note' in resultado_api and isinstance(resultado_api['note'], dict):
-                        note_inner = resultado_api['note']
-                        id_extraido = (
-                            note_inner.get('id') or
-                            note_inner.get('note_id') or
-                            note_inner.get('_id') or
-                            None
-                        )
-                        # Se encontrou em ['note'], marcar sucesso automaticamente
-                        if id_extraido:
-                            sucesso_flag = True
-                            log.info(f"   ✅ ID encontrado em ['note']['{list(resultado_api['note'].keys())[0]}'] = {id_extraido}")
-                    
-                    # Tentativa 2: Objeto aninhado em 'data' (formato alternativo comum)
-                    if not id_extraido and 'data' in resultado_api and isinstance(resultado_api['data'], dict):
-                        data_inner = resultado_api['data']
-                        id_extraido = (
-                            data_inner.get('id') or
-                            data_inner.get('note_id') or
-                            data_inner.get('_id') or
-                            None
-                        )
-                    
-                    # Verificar flag de sucesso explícita (se ainda não marcou como sucesso)
-                    if not sucesso_flag:
-                        sucesso_flag = (
-                            resultado_api.get('success') == True or
-                            resultado_api.get('ok') == True or
-                            resultado_api.get('status') == 'success' or
-                            resultado_api.get('created') == True or
-                            ('note' in resultado_api and isinstance(resultado_api['note'], dict)) or  # ✅ Tem note = sucesso!
-                            str(resultado_api.get('status_code', '')).startswith('2')
-                        )
-                    
-                elif isinstance(resultado_api, (int, str)):
-                    # Tentativa 3: API retornou diretamente o ID puro (int ou string)
-                    id_extraido = resultado_api
-                    sucesso_flag = True
-            
-            # Converter ID para string (garantir consistência)
-            if id_extraido is not None:
-                id_final = str(id_extraido)
-                log.info(f"✅ ID EXTRAÍDO COM SUCESSO: {id_final}")
-            else:
-                id_final = None
-                log.warning(f"⚠️  Não foi possível extrair ID da resposta")
-            # ================================================================
-            
-            # ================================================================
-            # ✅ NOVO: HEURÍSTICA DE SUCESSO INTELIGENTE (Tolerante a formatos)
-            # ================================================================
-            operacao_bem_sucedida = False
-            
-            if id_final:
-                # Caso ideal: temos um ID real extraído
-                operacao_bem_sucedida = True
-                log.info(f"   ✅ Sucesso confirmado via ID extraído: {id_final}")
+            # Verificar se a API retornou sucesso
+            if resultado_api and resultado_api.get('id'):
                 
-            elif resultado_api and sucesso_flag:
-                # Caso bom: não temos ID claro, mas API confirmou sucesso explicitamente
-                operacao_bem_sucedida = True
-                # Gerar ID temporário baseado em timestamp (único o suficiente para rastreamento)
-                id_final = f"temp-{datetime.now().strftime('%Y%m%d%H%M%S%f')}"
-                log.info(f"   ✅ Sucesso confirmado via flag da API (usando ID temporário: {id_final})")
-                
-            elif resultado_api and not str(resultado_api).lower().startswith(('error', 'falha', 'exception', 'none', 'null')):
-                # Caso aceitável: resposta existe, não parece ser erro, mas sem confirmação clara do formato
-                operacao_bem_sucedida = True
-                id_final = f"unknown-{datetime.now().strftime('%Y%m%d%H%M%S%f')}"
-                log.info(f"   ⚠️  Sucesso assumido (resposta não é erro, mas formato desconhecido)")
-                log.info(f"   Usando ID temporário: {id_final}")
-                
-            else:
-                # Caso ruim: provavelmente houve erro real ou resposta vazia/None
-                operacao_bem_sucedida = False
-                log.error(f"   ❌ Operação falhou: resposta vazia, None, ou indica erro explícito")
-            # ================================================================
-            
-            # PROCESSAR RESULTADO FINAL BASEADO NA HEURÍSTICA
-            if operacao_bem_sucedida:
-                # Sucesso! Atualizar nosso item com ID (real ou temporário)
-                item_capturado.id = id_final
+                # Sucesso! Atualizar nosso item com ID real do Lex Flow
+                item_capturado.id = str(resultado_api.get('id', item_capturado.id))
                 item_capturado.processed = False  # Ainda não processada pelo Decision Engine
                 
-                log.info(f"✅ CAPTURA REGISTRADA COM SUCESSO NO LEX FLOW!")
-                log.info(f"   ID atribuído: {item_capturado.id}")
-                
-                # Determinar tipo de ID para logging informativo
-                if id_final.startswith('temp-'):
-                    tipo_id = "temporário (API não retornou ID claro)"
-                elif id_final.startswith('unknown-'):
-                    tipo_id = "temporário genérico (formato desconhecido)"
-                else:
-                    tipo_id = "real (extraído da resposta da API)"
-                log.info(f"   Tipo de ID: {tipo_id}")
+                log.info(f"✅ SUCESSO! Captura salva no Lex Flow")
+                log.info(f"   ID retornado pela API: {item_capturado.id}")
+                log.info(f"   Título salvo: {resultado_api.get('title', 'N/A')}")
                 
                 # Adicionar ao cache de deduplicação para futuras verificações
-                hash_conteudo = self._calcular_hash_conteudo(item_capturado.content)
-                self._cache_deduplicacao[hash_conteudo] = item_capturado.id
+                conteudo_hash = self._calcular_hash_conteudo(item_capturado.content)
+                self._deduplication_cache[conteudo_hash] = item_capturado.id
                 
                 # Retornar sucesso
                 return CaptureResult(
@@ -721,14 +619,14 @@ class CaptureSystem:
                 )
                 
             else:
-                # Falha real na operação (não é caso de formato inesperado)
-                log.error(f"❌ FALHA REAL AO SALVAR CAPTURE NO LEX FLOW")
+                # API retornou mas sem ID (pode ser erro ou formato inesperado)
+                log.warning(f"⚠️  API retornou resposta inesperada: {resultado_api}")
                 return CaptureResult(
                     success=False,
                     item=item_capturado,
-                    message="Falha ao salvar capture no Lex Flow.",
-                    action_taken="api_call_failed",
-                    errors=[f"API response: {str(resultado_api)[:200] if resultado_api else 'No response'}"]
+                    message="Resposta inesperada do Lex Flow. Pode não ter sido salva.",
+                    action_taken="api_response_invalid",
+                    errors=[f"API response: {str(resultado_api)[:200]}"]
                 )
                 
         except Exception as erro_api:
@@ -745,11 +643,11 @@ class CaptureSystem:
                 errors=[f"{type(erro_api).__name__}: {str(erro_api)}"]
             )
     
-    def capturar_nota_de_voz(
+    def capture_voice_note(
         self,
-        texto_transcrito: str,
-        caminho_arquivo_audio: str = None,
-        modelo_whisper: str = "base",
+        transcription_text: str,
+        audio_file_path: str = None,
+        whisper_model: str = "base",
         tags: List[str] = None,
         source: str = "voice"
     ) -> CaptureResult:
@@ -757,7 +655,7 @@ class CaptureSystem:
         Capturar nota de voz (áudio já transcrito ou arquivo para transcrição)
         
         Este método lida com dois cenários:
-        1. Texto já transcrito (fornecido diretamente) ← MAIS COMUM
+        1. Texto já transcrito (fornecido diretamente)
         2. Arquivo de áudio que precisa ser transcrito (requer Whisper instalado)
         
         ATENÇÃO: A transcrição automática via Whisper requer:
@@ -766,13 +664,13 @@ class CaptureSystem:
         - Para produção, recomenda-se usar API de transcrição externa
         
         ARGUMENTOS:
-            texto_transcrito: Texto transcrito do áudio (se já tiver)
-                                OU deixe vazio se for fornecer caminho_arquivo_audio
+            transcription_text: Texto transcrito do áudio (se já tiver)
+                                OU deixe vazio se for fornecer audio_file_path
                                 
-            caminho_arquivo_audio: Caminho completo para arquivo de áudio (.mp3, .wav, .m4a)
-                             Será transcrito automaticamente se texto_transcrito vazio
+            audio_file_path: Caminho completo para arquivo de áudio (.mp3, .wav, .m4a)
+                             Será transcrito automaticamente se transcription_text vazio
                              
-            modelo_whisper: Modelo Whisper a usar (se precisar transcrever)
+            whisper_model: Modelo Whisper a usar (se precisar transcrever)
                            Opções: "tiny", "base", "small", "medium", "large"
                            "base" é bom equilíbrio velocidade/precisão
                            
@@ -781,18 +679,31 @@ class CaptureSystem:
         
         RETORNA:
             CaptureResult igual ao quick_capture()
+        
+        EXEMPLO:
+            
+            # Se já tem o texto transcrito (ex: via app de anotações)
+            resultado = capture.capture_voice_note(
+                transcription_text="Lembrar de ligar para o fornecedor amanhã"
+            )
+            
+            # Se tem o arquivo de áudio e quer transcrever automaticamente
+            resultado = capture.capture_voice_note(
+                audio_file_path="/caminho/para/nota_de_voz.mp3",
+                tags=["lembrete", "trabalho"]
+            )
         """
         
         log.info(f"🎤 Iniciando captura de nota de voz...")
         
-        texto_final = texto_transcrito
+        texto_final = transcription_text
         
         # Se não teve texto fornecido mas tem arquivo, tentar transcrever
-        if not texto_final and caminho_arquivo_audio:
-            log.info(f"📝 Transcrevendo arquivo de áudio: {caminho_arquivo_audio}")
+        if not texto_final and audio_file_path:
+            log.info(f"📝 Transcrevendo arquivo de áudio: {audio_file_path}")
             texto_final = self._transcrever_audio_com_whisper(
-                file_path=caminho_arquivo_audio,
-                model_name=modelo_whisper
+                file_path=audio_file_path,
+                model_name=whisper_model
             )
             
             if not texto_final:
@@ -826,17 +737,17 @@ class CaptureSystem:
             tags=todas_as_tags,
             metadata={
                 'original_source': 'voice_note',
-                'audio_file': caminho_arquivo_audio or 'provided_as_text',
-                'whisper_model': modelo_whisper
+                'audio_file': audio_file_path or 'provided_as_text',
+                'whisper_model': whisper_model
             }
         )
     
-    def capturar_web_clip(
+    def capture_web_clip(
         self,
         url: str,
-        resumo_personalizado: str = None,
+        custom_summary: str = None,
         tags: List[str] = None,
-        salvar_como_recurso: bool = True
+        save_as_resource: bool = True
     ) -> CaptureResult:
         """
         Capturar clip de página web (URL → conteúdo → resumo opcional → Lex Flow)
@@ -850,21 +761,28 @@ class CaptureSystem:
         ARGUMENTOS:
             url: URL completa da página a capturar (obrigatório, deve começar com http/https)
             
-            resumo_personalizado: Resumo personalizado (se já tiver, pula geração por IA)
+            custom_summary: Resumo personalizado (se já tiver, pula geração por IA)
                            Se None, usa smart_summary do Lex Flow automaticamente
                            
             tags: Tags opcionais além de "web-clip" automática
             
-            salvar_como_recurso: Se True, salva como Recurso (link)
+            save_as_resource: Se True, salva como Recurso (link)
                               Se False, salva como Note (conteúdo extraído)
+        
+        RETORNA:
+            CaptureResult com detalhes da operação
         
         LIMITAÇÕES CONHECIDAS:
         - Páginas que requerem JavaScript não funcionarão (usa requests simples)
         - Sites com paywall/blockeo de bots podem falhar
         - PDFs e arquivos não são processados (somente HTML)
         
-        RETORNA:
-            CaptureResult com detalhes da operação
+        EXEMPLO:
+            
+            resultado = capture.capture_web_clip(
+                url="https://artigo.interessante.com/como-monetizar-youtube",
+                tags=["youtube", "monetização", "referência"]
+            )
         """
         
         log.info(f"🌐 Iniciando captura de web clip: {url}")
@@ -894,7 +812,7 @@ class CaptureSystem:
             
             log.info(f"📥 Baixando conteúdo de: {url}")
             
-            # Headers para simular navegador real (evita bloqueios simples)
+            # Headers para simular navegador real (evitar bloqueios simples)
             cabecalhos_navegador = {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
                             '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -925,7 +843,7 @@ class CaptureSystem:
             
             if not texto_extraido or len(texto_extraido.strip()) < 50:
                 log.warning(f"⚠️  Pouco texto extraído de {url} ({len(texto_extraido or '')} chars)")
-                # Mesmo assim continua (pode ser página legitima com pouco texto)
+                # Mesmo assim continua, pode ser página legitima com pouco texto
             
             # Limitar tamanho (proteger contra páginas enormes)
             if len(texto_extraido) > 10000:
@@ -935,7 +853,7 @@ class CaptureSystem:
             log.info(f"📄 Texto extraído: {len(texto_extraido)} caracteres")
             
             # Gerar resumo (usar fornecido ou gerar com IA)
-            resumo_final = resumo_personalizado
+            resumo_final = custom_summary
             
             if not resumo_final:
                 log.info(f"🤖 Gerando resumo com IA do Lex Flow...")
@@ -963,7 +881,7 @@ class CaptureSystem:
                 pass
             
             # Salvar no Lex Flow
-            if salvar_como_recurso:
+            if save_as_resource:
                 log.info(f"💾 Salvando como RECURSO no Lex Flow...")
                 resultado_api = self.lex_flow.add_resource(
                     url=url,
@@ -993,7 +911,7 @@ class CaptureSystem:
                         metadata={'url': url, 'summary': resumo_final}
                     ),
                     message=f"Página web capturada com sucesso! ID: {resultado_api.get('id')}",
-                    action_taken="saved_as_resource" if salvar_como_recurso else "saved_as_note",
+                    action_taken="saved_as_resource" if save_as_resource else "saved_as_note",
                     errors=[]
                 )
             else:
@@ -1036,11 +954,11 @@ class CaptureSystem:
                 errors=[str(erro_generico)]
             )
     
-    def importacao_em_lote(
+    def bulk_import(
         self,
-        dados_itens: List[Dict[str, str]],
-        origem_padrao: str = "bulk",
-        parar_se_erro: bool = False
+        items_data: List[Dict[str, str]],
+        default_source: str = "bulk",
+        stop_on_error: bool = False
     ) -> BatchCaptureResult:
         """
         Importar múltiplos itens em lote (bulk import)
@@ -1052,13 +970,13 @@ class CaptureSystem:
         - Importar notas de outra ferramenta
         
         ARGUMENTOS:
-            dados_itens: Lista de dicionários, cada um representando um item
-                       Cada dicionário DEVE ter 'content' (obrigatório)
+            items_data: Lista de dicionários, cada um representando um item
+                       Cada dicionário deve ter 'content' (obrigatório)
                        Opcionais: 'source', 'type', 'tags', 'priority', 'metadata'
                        
-            origem_padrao: Origem padrão se item não especificar (padrão: "bulk")
+            default_source: Origem padrão se item não especificar (padrão: "bulk")
             
-            parar_se_erro: Se True, para no primeiro erro
+            stop_on_error: Se True, para no primeiro erro
                           Se False, continua tentando os demais (padrão)
         
         RETORNA:
@@ -1079,12 +997,23 @@ class CaptureSystem:
             },
             # ... mais itens ...
         ]
+        
+        EXEMPLO DE USO:
+        
+        lote = [
+            {"content": "Ideia 1 do arquivo antigo", "source": "migration"},
+            {"content": "Tarefa importante esquecida", "type": "task", "priority": "high"},
+            {"content": "Referência interessante", "source": "web", "type": "reference"}
+        ]
+        
+        resultado = capture.bulk_import(lote)
+        print(f"Importados: {resultado.successful}/{resultado.total_submitted}")
         """
         
-        log.info(f"📦 Iniciando importação em lote: {len(dados_itens)} itens")
+        log.info(f"📦 Iniciando importação em lote: {len(items_data)} itens")
         
         resultado_lote = BatchCaptureResult(
-            total_submitted=len(dados_itens),
+            total_submitted=len(items_data),
             successful=0,
             failed=0,
             items=[],
@@ -1092,33 +1021,34 @@ class CaptureSystem:
         )
         
         # Processar cada item individualmente
-        for indice, item_dado in enumerate(dados_itens, start=1):
+        for indice, item_dado in enumerate(items_data, start=1):
             
-            log.info(f"   Processando item {indice}/{len(dados_itens)}...")
+            log.info(f"   Processando item {indice}/{len(items_data)}...")
             
             # Validar estrutura mínima
             if not isinstance(item_dado, dict) or 'content' not in item_dado:
-                erro_msg = f"Item {indice} inválido: precisa de campo 'content'"
-                log.error(f"   ❌ {erro_msg}")
+                error_msg = f"Item {indice} inválido: precisa de campo 'content'"
+                log.error(f"   ❌ {error_msg}")
                 resultado_lote.failed += 1
-                resultado_lote.errors.append(erro_msg)
+                resultado_lote.errors.append(error_msg)
                 
                 # Criar item dummy para registro (mesmo falhado)
                 item_falho = CaptureItem(
                     content=str(item_dado),
                     source=CaptureSource.BULK_IMPORT,
-                    type=CaptureType.IDEA,
-                    metadata={'error': 'Estrutura inválida'}
+                    type=CaptureType.IDEA
                 )
                 resultado_lote.items.append(item_falho)
                 
-                if parar_se_erro:
-                    log.error("   ⛔ Parando importação (parar_se_erro=True)")
+                if stop_on_error:
+                    log.error("   ⛔ Parando importação (stop_on_error=True)")
                     break
+                
+                continue
             
             # Extrair dados do dicionário (com defaults seguros)
             conteudo = item_dado.get('content', '')
-            origem = item_dado.get('source', origem_padrao)
+            origem = item_dado.get('source', default_source)
             tipo_str = item_dado.get('type', 'idea')
             tags_item = item_dado.get('tags', [])
             prioridade_str = item_dado.get('priority', 'medium')
@@ -1176,15 +1106,15 @@ class CaptureSystem:
                 )
                 resultado_lote.items.append(item_excecao)
                 
-                if parar_se_erro:
-                    log.error("   ⛔ Parando importação (parar_se_erro=True)")
+                if stop_on_error:
+                    log.error("   ⛔ Parando importação (stop_on_error=True)")
                     break
         
         # Log final do lote
         log.info("=" * 70)
         log.info(f"📊 IMPORTAÇÃO EM LOTE CONCLUÍDA:")
         log.info(f"   Total tentado: {resultado_lote.total_submitted}")
-        log.info(f"   ✅ Sucessos: {resultado_lote.successful}")
+        log.info(f"   ✅ Sucesso: {resultado_lote.successful}")
         log.info(f"   ❌ Falhas: {resultado_lote.failed}")
         log.info(f"   Taxa de sucesso: {(resultado_lote.successful / max(resultado_lote.total_submitted, 1)) * 100:.1f}%")
         log.info("=" * 70)
@@ -1195,16 +1125,19 @@ class CaptureSystem:
     # MÉTODOS DE PROCESSAMENTO E BUSCA
     # ========================================
     
-    def processar_inbox_com_inteligencia(self) -> Dict:
+    def process_inbox_with_intelligence(self) -> Dict:
         """
         Processar inbox inteiro com inteligência artificial do Lex Flow
         
         Busca todas as notas pendentes no Inbox do Lex Flow,
-        envia para o smart_categorize (IA analisa) e retorna
-        sugestões de organização para cada uma.
+        envia para o smart_categorize (IA) e retorna sugestões
+        de organização para cada uma.
         
-        IMPORTANTE: Este método NÃO move/apaga notas do inbox!
-        Apenas GERA SUGESTÕES. Use decision_engine para executar.
+        FLUXO:
+        1. Busca get_inbox() do Lex Flow (todas as notas pendentes)
+        2. Extrai títulos e conteúdos
+        3. Chama smart_categorize() do Lex Flow (IA analisa)
+        4. Retorna relatório com sugestões por nota
         
         RETORNA:
             Dicionário com:
@@ -1212,6 +1145,9 @@ class CaptureSystem:
             - processed: Quantas foram analisadas
             - suggestions: Lista de sugestões (uma por nota)
             - errors: Erros se houverem
+        
+        NOTA: Este método NÃO move/apaga notas do inbox.
+        Apenas gera sugestões. Use decision_engine para executar.
         """
         
         log.info(f"🤖 Iniciando processamento do Inbox com IA...")
@@ -1268,41 +1204,41 @@ class CaptureSystem:
         
         return resultado_processamento
     
-    def buscar_capturas(self, consulta: str, limite: int = 10) -> List[Dict]:
+    def search_captures(self, query: str, limit: int = 10) -> List[Dict]:
         """
         Buscar capturas anteriores por texto (busca simples)
         
         Usa a função search_notes do Lex Flow para encontrar
-        notas cujo título contenham a consulta fornecida.
+        notas cujo título contenha a query fornecida.
         
         Para busca semântica avançada (RAG), use memory_system.search()
         
         ARGUMENTOS:
-            consulta: Texto para buscar (pode ser parcial)
-            limite: Máximo de resultados (padrão: 10)
+            query: Texto para buscar (pode ser parcial)
+            limit: Máximo de resultados (padrão: 10)
         
         RETORNA:
             Lista de dicionários (notas encontradas) ou lista vazia
         """
         
-        log.info(f"🔍 Buscando capturas: '{consulta}' (limite: {limite})")
+        log.info(f"🔍 Buscando capturas: '{query}' (limite: {limit})")
         
         try:
-            resultados = self.lex_flow.search_notes(query=consulta)
+            resultados = self.lex_flow.search_notes(query=query)
             
             if resultados:
                 log.info(f"✅ Encontradas {len(resultados)} notas")
-                # Aplicar limite
-                return resultados[:limite]
+                # Aplicar limit
+                return resultados[:limit]
             else:
-                log.info(f"📭 Nenhuma nota encontrada para: '{consulta}'")
+                log.info(f"📭 Nenhuma nota encontrada para: '{query}'")
                 return []
                 
         except Exception as erro_busca:
             log.error(f"❌ Erro na busca: {erro_busca}")
             return []
     
-    def obter_contagem_inbox(self) -> int:
+    def get_inbox_count(self) -> int:
         """
         Obter quantidade de itens pendentes no Inbox
         
@@ -1318,14 +1254,17 @@ class CaptureSystem:
             return 0
     
     # ========================================
-    # MÉTODOS AUXILIARES INTERNOS (PRIVADOS)
+    # MÉTODOS AUXILIARES INTERNOS (PRIVATE)
     # ========================================
     
-    def _eh_duplicata(self, item: CaptureItem) -> bool:
+    def _is_duplicate_item(self, item: CaptureItem) -> bool:
         """
         Verificar se item é duplicata de algo já capturado recentemente
         
         Usa cache local rápido (memória) para evitar chamadas à API.
+        Considera duplicata se:
+        - Conteúdo for idêntico (exato)
+        - Ou similaridade > 95% (implementação futura com embeddings)
         
         ARGUMENTOS:
             item: CaptureItem a verificar
@@ -1338,12 +1277,12 @@ class CaptureSystem:
         hash_conteudo = self._calcular_hash_conteudo(item.content)
         
         # Verificar no cache local
-        if hash_conteudo in self._cache_deduplicacao:
+        if hash_conteudo in self._deduplication_cache:
             log.debug(f"   ♻️  Duplicata detectada no cache (hash: {hash_conteudo})")
             return True
         
         # TODO: Implementar verificação no próprio Lex Flow (buscar notas similares)
-        # Por enquanto, só confia no cache local (resetado a cada reinicialização do sistema)
+        # Por enquanto, só confia no cache local (resetado a cada reinício do sistema)
         
         return False
     
@@ -1365,7 +1304,7 @@ class CaptureSystem:
         
         return hashlib.sha256(conteudo_normalizado.encode('utf-8')).hexdigest()
     
-    def _transcrever_audio_com_whisper(self, caminho_arquivo: str, nome_modelo: str = "base") -> Optional[str]:
+    def _transcrever_audio_com_whisper(self, file_path: str, model_name: str = "base") -> Optional[str]:
         """
         Transcrever arquivo de áudio para texto usando OpenAI Whisper
         
@@ -1373,8 +1312,8 @@ class CaptureSystem:
         Instale com: pip install openai-whisper
         
         ARGUMENTOS:
-            caminho_arquivo: Caminho completo para arquivo de áudio
-            nome_modelo: Modelo Whisper ("tiny", "base", "small", "medium", "large")
+            file_path: Caminho completo para arquivo de áudio
+            model_name: Modelo Whisper ("tiny", "base", "small", "medium", "large")
         
         RETORNA:
             String com texto transcrito ou None se falhar
@@ -1383,11 +1322,11 @@ class CaptureSystem:
         try:
             import whisper
             
-            log.info(f"🎙️  Carregando modelo Whisper: {nome_modelo}")
-            modelo = whisper.load_model(nome_modelo)
+            log.info(f"🎙️  Carregando modelo Whisper: {model_name}")
+            modelo = whisper.load_model(model_name)
             
-            log.info(f"🎙️  Transcrevendo arquivo: {caminho_arquivo}")
-            resultado_transcricao = modelo.transcribe(caminho_arquivo)
+            log.info(f"🎙️  Transcrevendo arquivo: {file_path}")
+            resultado_transcricao = modelo.transcribe(file_path)
             
             texto_transcrito = resultado_transcricao["text"]
             
@@ -1404,7 +1343,7 @@ class CaptureSystem:
             log.error(f"❌ Erro na transcrição Whisper: {erro_whisper}")
             return None
     
-    def _extrair_texto_de_html(self, conteudo_html: str) -> str:
+    def _extrair_texto_de_html(self, html_content: str) -> str:
         """
         Extrair texto limpo de conteúdo HTML (implementação simplificada)
         
@@ -1414,7 +1353,7 @@ class CaptureSystem:
         Esta implementação é básica mas funcional para casos simples.
         
         ARGUMENTOS:
-            conteudo_html: String com código HTML bruto
+            html_content: String com código HTML bruto
             
         RETORNA:
             String com texto extraído (sem tags HTML)
@@ -1423,7 +1362,7 @@ class CaptureSystem:
         # Tentar usar BeautifulSoup se disponível (melhor qualidade)
         try:
             from bs4 import BeautifulSoup
-            soup = BeautifulSoup(conteudo_html, 'html.parser')
+            soup = BeautifulSoup(html_content, 'html.parser')
             
             # Remover scripts e styles
             for elemento in soup(['script', 'style']):
@@ -1442,7 +1381,7 @@ class CaptureSystem:
             log.debug("   Usando extrator HTML baseado em regex (BeautifulSoup não disponível)")
             
             # Remove scripts
-            texto_sem_scripts = re.sub(r'<script[^>]*>.*?</script>', '', conteudo_html, flags=re.DOTALL | re.IGNORECASE)
+            texto_sem_scripts = re.sub(r'<script[^>]*>.*?</script>', '', html_content, flags=re.DOTALL | re.IGNORECASE)
             
             # Remove styles
             texto_sem_styles = re.sub(r'<style[^>]*>.*?</style>', '', texto_sem_scripts, flags=re.DOTALL | re.IGNORECASE)
@@ -1450,7 +1389,7 @@ class CaptureSystem:
             # Remove todas as tags HTML restantes
             texto_sem_tags = re.sub(r'<[^>]+>', ' ', texto_sem_styles)
             
-            # Decodifica entidades HTML básicas (&amp;, &lt;, &gt;, etc.)
+            # Decodifica entidades HTML básicas (&amp;, &lt;, etc.)
             texto_decodificado = texto_sem_tags.replace('&amp;', '&').replace('&lt;', '<').replace('&gt;', '>').replace('&nbsp;', ' ')
             
             # Colapsar espaços múltiplos e linhas vazias
@@ -1459,11 +1398,11 @@ class CaptureSystem:
             return '\n'.join(linhas)
     
     # ========================================
-    # MÉTODOS ESTÁTICOS E UTILITÁRIOS
+    # MÉTODOS ESTATÍTICOS E UTILITÁRIOS
     # ========================================
     
     @staticmethod
-    def validar_dados_captura(data: Dict) -> tuple:
+    def validate_capture_data(data: Dict) -> tuple:
         """
         Validar estrutura de dados de captura (para uso em APIs/bulk)
         
@@ -1513,7 +1452,7 @@ class CaptureSystem:
         valido = len(erros_encontrados) == 0
         return (valido, erros_encontrados)
     
-    def obter_estatisticas(self) -> Dict:
+    def get_statistics(self) -> Dict:
         """
         Obter estatísticas de uso do Capture System
         
@@ -1528,9 +1467,9 @@ class CaptureSystem:
         """
         
         return {
-            'inbox_count': self.obter_contagem_inbox(),
-            'deduplication_cache_size': len(self._cache_deduplicacao),
-            'generated_ids_count': self._contador_ids,
+            'inbox_count': self.get_inbox_count(),
+            'deduplication_cache_size': len(self._deduplication_cache),
+            'generated_ids_count': self._id_counter,
             'system_status': 'active',
             'lex_flow_connected': self.lex_flow.is_authenticated() if hasattr(self.lex_flow, 'is_authenticated') else True,
             'timestamp': datetime.now().isoformat()
@@ -1543,7 +1482,7 @@ class CaptureSystem:
 
 if __name__ == "__main__":
     """
-    Teste Completo do Capture System v2.0
+    Teste completo do Capture System v2.0
     
     Execute: python engine/capture_system.py
     
@@ -1552,7 +1491,7 @@ if __name__ == "__main__":
     2. Captura rápida de ideia (quick_capture)
     3. Captura de nota de voz (simulada)
     4. Importação em lote (bulk_import)
-    5. Busca de capturas (search_capturas)
+    5. Busca de capturas (search_captures)
     6. Estatísticas do sistema
     """
     
@@ -1630,7 +1569,7 @@ if __name__ == "__main__":
     print("2️⃣  TESTE: Voice Note Capture (Nota de Voz)")
     print("-" * 80)
     
-    resultado_teste2 = capture.capturar_nota_de_voz(
+    resultado_teste2 = capture.capture_voice_note(
         transcription_text="Lembrete de voz: Preciso revisar o contrato do fornecedor até sexta-feira.",
         tags=["trabalho", "lembrete", "prazo"],
         source="test-script"
@@ -1646,7 +1585,7 @@ if __name__ == "__main__":
     # ========================================
     # TESTE 3: IMPORTAÇÃO EM LOTE (BULK IMPORT)
     # ========================================
-    print("\n" * 80)
+    print("\n" + "-" * 80)
     print("3️⃣  TESTE: Bulk Import (Importação em Lote)")
     print("-" * 80)
     
@@ -1657,9 +1596,9 @@ if __name__ == "__main__":
         {"content": "Referência em lote: https://exemplo.com/artigo-interessante", "type": "reference"}
     ]
     
-    resultado_lote = capture.importacao_em_lote(
-        dados_itens=itens_para_importar,
-        origem_padrao="test-bulk"
+    resultado_lote = capture.bulk_import(
+        items_data=itens_para_importar,
+        default_source="test-bulk"
     )
     
     print(f"   Total tentado: {resultado_lote.total_submitted}")
@@ -1676,7 +1615,7 @@ if __name__ == "__main__":
     print("4️⃣  TESTE: Search Captures (Busca)")
     print("-" * 80)
     
-    resultados_busca = capture.buscar_capturas(consulta="teste", limite=5)
+    resultados_busca = capture.search_captures(query="teste", limit=5)
     
     if resultados_busca:
         print(f"   ✅ Encontrados {len(resultados_busca)} resultados:")
@@ -1692,7 +1631,7 @@ if __name__ == "__main__":
     print("5️⃣  TESTE: Statistics (Estatísticas)")
     print("-" * 80)
     
-    estatisticas = capture.obter_estatisticas()
+    estatisticas = capture.get_statistics()
     
     print(f"   Itens no Inbox: {estatisticas['inbox_count']}")
     print(f"   Cache Deduplicação: {estatisticas['deduplication_cache_size']} itens")
@@ -1724,7 +1663,7 @@ if __name__ == "__main__":
     
     if total_sucessos >= 4:  # Pelo menos 4 de 5
         print("\n🎉 CAPTURE SYSTEM v2.0 FUNCIONANDO PERFEITAMENTE!")
-        print("   Integração com Lex Flow: ✅ PRODUCTION READY")
+        print("   Integração com Lex Flow: ✅ PRODUÇÃO READY")
     else:
         print("\n⚠️  Alguns testes falharam. Verifique os logs em logs/capture_system.log")
     

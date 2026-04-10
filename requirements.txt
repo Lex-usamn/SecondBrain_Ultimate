@@ -1,32 +1,134 @@
-# Segundo Cérebro Ultimate - Dependências Python
-# =============================================
+# =============================================================================
+# SECOND BRAIN ULTIMATE - Dependências Python (Atualizado: Abril 2026)
+# =============================================================================
+#
+# COMO INSTALAR:
+#   pip install -r requirements.txt
+#
+# VERSÃO RECOMENDADA: Python 3.11 ou 3.12 (Evite 3.14 enquanto onnxruntime não atualizar)
+#
+# ORGANIZAÇÃO POR CATEGORIA:
+#   1. Essenciais (core functionality)
+#   2. Integrações APIs Externas
+#   3. Inteligência Artificial / ML
+#   4. Comunicação (Telegram/Discord)
+#   5. Utilitários e Ferramentas
+#   6. Futuro (descomentar quando necessário)
+#
+# =============================================================================
 
-# HTTP Requests (obrigatório para Lex Flow API)
+
+# =============================================================================
+# 1. ESSENCIAIS (Funcionalidades Básicas do Sistema)
+# =============================================================================
+
+# HTTP Requests - Obrigatório para comunicação com Lex Flow API e APIs externas
 requests>=2.31.0
 
-# Manipulação de dados JSON avançada
+# Manipulação de arquivos .env (variáveis de ambiente para credenciais sensíveis)
 python-dotenv>=1.0.0
 
-# Manipulação de datas e horários
+# Manipulação avançada de datas e horários (parses flexíveis, timezones)
 python-dateutil>=2.8.2
 
-# Logging colorido (opcional, mas ajuda)
+# YAML Parser - Leitura do config/settings.yaml (configuração centralizada)
+pyyaml>=6.0
+
+# Logging colorido no console (facilita leitura de logs durante desenvolvimento)
 colorlog>=6.7.0
 
-# Para futuras features (busca vetorial, embeddings)
-# Descomentar quando necessário:
 
-# fastembed>=0.3.0          # Embeddings locais (busca semântica)
-# sqlite-vec>=0.1.0         # Vector search em SQLite
-# anthropic>=0.18.0          # SDK oficial Anthropic Claude
-# google-generativeai>=0.3.0 # SDK Google Gemini
+# =============================================================================
+# 2. INTEGRAÇÕES COM APIs EXTERNAS
+# =============================================================================
 
-# Para Telegram Bot (futuro)
-# python-telegram-bot>=20.7
+# Google APIs (Gmail, Calendar, Drive, YouTube Studio) - Para automações futuras
+google-api-python-client>=2.100.0
 
-# Para Discord Bot (futuro)  
+# Google Auth - Autenticação OAuth2 para serviços Google
+google-auth>=2.23.0
+
+# HTTP libraries para Google APIs (dependência transitiva, mas explícita para clareza)
+google-auth-httplib2>=0.2.0
+
+
+# =============================================================================
+# 3. INTELIGÊNCIA ARTIFICIAL / MACHINE LEARNING
+# =============================================================================
+
+# SDK Oficial Anthropic Claude (IA primária para raciocínio complexo)
+anthropic>=0.18.0
+
+# SDK Google Gemini (IA secundária/backup para redundância)
+google-generativeai>=0.3.0
+
+# Embeddings Locais (FastEmbed com modelo QMX) - Para busca semântica/RAG
+# NOTA: O conflito no Python 3.14 ocorre porque o onnxruntime ainda não suporta esta versão.
+# Se precisar usar Python 3.14, você teria que compilar o onnxruntime do código-fonte (não recomendado).
+fastembed>=0.4.1
+
+
+# =============================================================================
+# 4. COMUNICAÇÃO - TELEGRAM BOT (✅ ATIVO - FASE 2 IMPLEMENTADA)
+# =============================================================================
+
+# Biblioteca oficial/não-oficial para bots do Telegram (versão 20+ com async)
+python-telegram-bot>=20.7
+
+
+# =============================================================================
+# 5. COMUNICAÇÃO - DISCORD BOT (FUTURO - FASE 2.5)
+# =============================================================================
+
+# Biblioteca para bots do Discord (comunidade, notificações)
 # discord.py>=2.3.0
 
-fastembed>=0.3.0
-anthropic>=0.18.0
-google-api-python-client>=2.100.0
+
+# =============================================================================
+# 6. UTILITÁRIOS E FERRAMENTAS AUXILIARES
+# =============================================================================
+
+# Web Scraping (Beautiful Soup) - Para web clips e extração de conteúdo de URLs
+beautifulsoup4>=4.12.0
+
+# Transcrição de áudio (Whisper OpenAI) - Para voice notes do Telegram
+# openai-whisper>=20231117
+
+
+# =============================================================================
+# 7. AGENDAMENTO E AUTOMAÇÕES (FUTURO - FASE 3)
+# =============================================================================
+
+# Agendador de tarefas (APScheduler)
+# apscheduler>=3.10.0
+
+
+# =============================================================================
+# 8. BANCO DE DADOS VETORIAL (FUTURO - FASE 4 - RAG)
+# =============================================================================
+
+# Vector Search em SQLite (leve, local, sem servidor separado)
+# sqlite-vec>=0.1.0
+
+# Vector Search em PostgreSQL (produção pesada, escalável)
+# pgvector>=0.2.0
+
+
+# =============================================================================
+# 9. DESENVOLVIMENTO E TESTES (Opcional)
+# =============================================================================
+
+# Framework de testes
+# pytest>=7.4.0
+
+# Coverage de testes
+# pytest-cov>=4.1.0
+
+# Type checking estático
+# mypy>=1.5.0
+
+# Formatação automática de código
+# black>=23.0.0
+
+# Linter
+# flake8>=6.1.0

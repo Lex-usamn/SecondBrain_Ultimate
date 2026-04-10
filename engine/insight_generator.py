@@ -1,103 +1,221 @@
 """
-Insight Generator - Gerador de Insights Automáticos
-====================================================
+Insight Generator v2.0 - Gerador de Insights Inteligentes do Segundo Cérebro
+==========================================================================
 
 Analisa dados do Lex Flow + Memory + Histórico para gerar
 insights acionáveis, detectar padrões e identificar oportunidades.
 
+Este é o "cérebro que PENSA" do sistema - não só processa dados,
+mas gera CONHECIMENTO e SABEDORIA acionável.
+
 Funcionalidades:
 - Insights diários (baseados em atividades do dia)
-- Insights semanais (tendências e padrões)
+- Insights semanais (tendências e padrões de longo prazo)
 - Detecção de anomalias (métricas fora do normal)
-- Análise de saúde dos projetos
-- Sugestões de otimização
+- Análise de saúde dos projetos (estagnação, risco)
+- Sugestões de otimização personalizadas
+- Relatório TELOS automatizado (semanal)
 - Aprendizado contínuo (salva descobertas no MEMORY.md)
+- Correlação entre métricas diferentes
+
+Integração Lex Flow:
+- Dados reais via get_dashboard(), get_projects(), get_inbox()
+- Histórico de atividades para análise de tendências
+- Métricas de produtividade para benchmarking
+- Projetos e tarefas para análise de saúde
 
 Autor: Second Brain Ultimate System
-Versão: 1.0.0
+Versão: 2.0.0 (Refatorado - Integração Lex Flow Real)
+Data: 09/04/2026
 """
 
 import os
 import json
 import logging
 import re
+import statistics
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Tuple
 from dataclasses import dataclass, field
 from collections import defaultdict
 from enum import Enum
-import statistics
+from functools import lru_cache
 
+# ============================================
+# IMPORTS DOS MÓDULOS DO ENGINE (com fallbacks robustos)
+# ============================================
 try:
     from .memory_system import MemorySystem
 except ImportError:
     from memory_system import MemorySystem
 
 try:
-    from integrations.lex_flow_definitivo import LexFlowClient
+    from .decision_engine import DecisionEngine
 except ImportError:
-    # Tentar import relativo se for usado como pacote
     try:
-        from ..integrations.lex_flow_definitivo import LexFlowClient
+        from decision_engine import DecisionEngine
+    except ImportError:
+        DecisionEngine = None  # Opcional
+
+# ============================================
+# IMPORT DO LEX FLOW CLIENT (com fallbacks)
+# ============================================
+try:
+    from ..integrations.lex_flow_definitivo import LexFlowClient
+except ImportError:
+    try:
+        from integrations.lex_flow_definitivo import LexFlowClient
     except ImportError:
         # Último recurso: import absoluto
         import sys
-        from pathlib import Path
-        sys.path.insert(0, str(Path(__file__).parent.parent))
-        from integrations.lex_flow_definitivo import LexFlowClient
+        from pathlib import Path as _Path
+        sys.path.insert(0, str(_Path(__file__).parent.parent))
+        try:
+            from integrations.lex_flow_definitivo import LexFlowClient
+        except ImportError:
+            class LexFlowClient:
+                """Placeholder quando não disponível"""
+                pass
+
 
 # ============================================
-# LOGGING
+# LOGGING DEDICADO
 # ============================================
 os.makedirs('logs', exist_ok=True)
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s | %(name)-18s | %(levelname)-8s | %(message)s',
-    datefmt='%H:%M:%S',
-    handlers=[
-        logging.FileHandler('logs/insight_generator.log', encoding='utf-8'),
-        logging.StreamHandler()
-    ]
-)
-log = logging.getLogger('InsightGenerator')
+# Logger específico deste módulo
+logger_insight = logging.getLogger('InsightGenerator')
+
+# Configurar handler apenas se não existe ainda (evita duplicados)
+if not logger_insight.handlers:
+    logger_insight.setLevel(logging.DEBUG)
+    
+    # Handler para arquivo
+    file_handler = logging.FileHandler(
+        'logs/insight_generator.log',
+        encoding='utf-8',
+        mode='a'
+    )
+    file_handler.setLevel(logging.DEBUG)
+    file_handler.setFormatter(logging.Formatter(
+        '%(asctime)s | %(name)-18s | %(levelname)-8s | %(message)s',
+        datefmt='%H:%M:%S'
+    ))
+    
+    # Handler para console
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.INFO)
+    console_handler.setFormatter(logging.Formatter(
+        '%(asctime)s | %(levelname)-8s | %(message)s',
+        datefmt='%H:%M:%S'
+    ))
+    
+    logger_insight.addHandler(file_handler)
+    logger_insight.addHandler(console_handler)
+
 
 # ============================================
-# ENUMS E CONSTANTS
+# ENUMS E CONSTANTES
 # ============================================
 
 class InsightType(Enum):
-    """Tipos de insights gerados"""
-    PATTERN = "pattern"           # Padrão identificado
-    ANOMALY = "anomaly"           # Anomalia detectada
-    OPPORTUNITY = "opportunity"   # Oportunidade de melhoria
-    WARNING = "warning"           # Alerta preventivo
-    ACHIEVEMENT = "achievement"   # Conquista/marco atingido
-    TREND = "trend"              # Tendência observada
+    """
+    Tipos de insights gerados pelo sistema
+    
+    Cada tipo tem uma semântica diferente e é tratado
+    de forma distinta nas recomendações.
+    
+    - PATTERN: Comportamento recorrente identificado
+    - ANOMALY: Valor fora do normal (muito alto/baixo)
+    - OPPORTUNITY: Chance de melhoria ou ganho
+    - WARNING: Alerta preventivo sobre risco futuro
+    - ACHIEVEMENT: Marco positivo atingido
+    - TREND: Direção de mudança ao longo do tempo
+    - CORRELATION: Relação entre duas métricas
+    - SUGGESTION: Recomendação de ação concreta
+    """
+    PATTERN = "pattern"           # Padrão identificado nos dados
+    ANOMALY = "anomaly"           # Anomalia detectada (fora do normal)
+    OPPORTUNITY = "opportunity"   # Oportunidade de melhoria/ganho
+    WARNING = "warning"           # Alerta preventivo (risco futuro)
+    ACHIEVEMENT = "achievement"   # Conquista/marco positivo atingido
+    TREND = "trend"              # Tendência observada (subindo/descendo)
     CORRELATION = "correlation"  # Correlação entre métricas
-    SUGGESTION = "suggestion"     # Sugestão de ação
+    SUGGESTION = "suggestion"     # Sugestão de ação concreta
+
 
 class InsightConfidence(Enum):
-    """Níveis de confiança no insight"""
-    HIGH = "high"       # > 80% certeza
-    MEDIUM = "medium"   # 60-80% certeza
-    LOW = "low"         # < 60% certeza (hipótese)
+    """
+    Níveis de confiança no insight
+    
+    Baseado em quantidade de evidências e consistência dos dados.
+    Usado para priorizar quais insights mostrar ao usuário.
+    
+    - HIGH: > 80% certeza (muitas evidências, padrão claro)
+    - MEDIUM: 60-80% certeza (evidências moderadas)
+    - LOW: < 60% certeza (hipótese, poucos dados)
+    """
+    HIGH = "high"       # > 80% certeza - ação recomendada fortemente
+    MEDIUM = "medium"   # 60-80% certeza - considerar ação
+    LOW = "low"         # < 60% certeza - apenas observação
+
 
 class ProjectHealth(Enum):
-    """Saúde de um projeto"""
-    EXCELLENT = "excellent"   # Excelente progresso
-    GOOD = "good"             # Bom andamento
-    ATTENTION = "attention"   # Precisa de atenção
-    CRITICAL = "critical"     # Crítico, risco de stall
-    STALLED = "stalled"       # Já está parado
+    """
+    Classificação de saúde de um projeto
+    
+    Usada para priorizar quais projetos precisam de atenção.
+    """
+    EXCELLENT = "excellent"   # Excelente progresso, acima das expectativas
+    GOOD = "good"             # Bom andamento, no ritmo esperado
+    ATTENTION = "attention"   # Precisa de atenção, leve desaceleração
+    CRITICAL = "critical"     # Crítico, alto risco de stall/abandono
+    STALLED = "stalled"       # Já está parado/inativo
+
+
+class TelosDimension(Enum):
+    """
+    Dimensões do framework TELOS (Weekly Review)
+    
+    TELOS é um framework holístico de revisão semanal:
+    - Time: Gestão do tempo e energia
+    - Energy: Nível físico e mental
+    - Light: Claro mental, foco, propósito
+    - Opportunity: Oportunidades identificadas
+    - Significance: Impacto e significado do trabalho
+    """
+    TIME = "time"             # Tempo: como usei meu tempo?
+    ENERGY = "energy"         # Energia: nível físico/emocional?
+    LIGHT = "light"           # Luz: clareza mental, aprendizados?
+    OPPORTUNITY = "opportunity"  # Oportunidade: chances perdidas/encontradas?
+    SIGNIFICANCE = "significance"  # Significado: impacto do trabalho?
+
 
 # ============================================
-# DATA CLASSES
+# DATA CLASSES DE INSIGHTS E RESULTADOS
 # ============================================
 
 @dataclass
 class Insight:
-    """Um insight gerado pelo sistema"""
+    """
+    Um insight gerado pelo sistema
+    
+    Representa uma descoberta, padrão ou recomendação
+    identificada pela análise dos dados.
+    
+    Attributes:
+        id: Identificador único (gerado automaticamente)
+        type: Tipo do insight (InsightType enum)
+        title: Título curto e chamativo
+        description: Descrição detalhada do insight
+        confidence: Nível de confiança (InsightConfidence enum)
+        data_points: Evidências/dados que suportam este insight
+        action_suggestions: Lista de ações recomendadas
+        created_at: Timestamp de criação (ISO format)
+        category: Categoria para agrupamento (productivity, project, etc.)
+        source: Fonte dos dados (lex_flow, memory, hybrid)
+        priority: Prioridade de exibição (1-10, maior = mais importante)
+    """
     id: str = ""
     type: InsightType = InsightType.PATTERN
     title: str = ""
@@ -106,14 +224,26 @@ class Insight:
     data_points: List[Any] = field(default_factory=list)
     action_suggestions: List[str] = field(default_factory=list)
     created_at: str = ""
-    category: str = ""  # productivity, project, habit, system, etc.
+    category: str = ""  # productivity, project, habit, system, learning
+    source: str = "hybrid"
+    priority: int = 5  # 1-10, maior = mais importante
     
     def __post_init__(self):
+        """Inicialização automática de campos opcionais"""
         if not self.id:
-            self.id = f"INS_{datetime.now().strftime('%Y%m%d%H%M%S')}"
+            self.id = f"INS_{datetime.now().strftime('%Y%m%d%H%M%S%f')[:17]}"
+        if not self.created_at:
             self.created_at = datetime.now().isoformat()
     
-    def to_dict(self) -> Dict:
+    def to_dict(self) -> Dict[str, Any]:
+        """
+        Converte insight para dicionário serializável
+        
+        Útil para enviar via API, salvar em JSON, ou exibir em dashboard.
+        
+        Returns:
+            Dicionário com todos os campos do insight
+        """
         return {
             'id': self.id,
             'type': self.type.value,
@@ -123,32 +253,120 @@ class Insight:
             'data_points': self.data_points[:5],  # Limitar para serialização
             'action_suggestions': self.action_suggestions,
             'created_at': self.created_at,
-            'category': self.category
+            'category': self.category,
+            'source': self.source,
+            'priority': self.priority
         }
+
 
 @dataclass
 class Pattern:
-    """Padrão identificado nos dados"""
+    """
+    Padrão identificado nos dados
+    
+    Um pattern é um comportamento recorrente que acontece
+    múltiplas vezes e pode ser aproveitado ou corrigido.
+    
+    Attributes:
+        name: Nome curto do padrão
+        description: Descrição do que significa
+        frequency: Quantas vezes foi detectado
+        examples: Exemplos concretos de ocorrências
+        impact: Impacto estimado (low/medium/high)
+        actionable: Se pode ser transformado em ação
+        positive: Se é um padrão positivo (bom hábito) ou negativo
+    """
     name: str
     description: str
-    frequency: int  # Quantas vezes ocorreu
+    frequency: int = 1  # Quantas vezes ocorreu
     examples: List[str] = field(default_factory=list)
     impact: str = "medium"  # low, medium, high
     actionable: bool = True
+    positive: bool = True  # True = bom padrão, False = ruim padrão
     
-    def to_dict(self) -> Dict:
+    def to_dict(self) -> Dict[str, Any]:
+        """Converte para dicionário serializável"""
         return {
             'name': self.name,
             'description': self.description,
             'frequency': self.frequency,
             'examples': self.examples[:3],
             'impact': self.impact,
-            'actionable': self.actionable
+            'actionable': self.actionable,
+            'positive': self.positive
         }
+
+
+@dataclass
+class ProjectHealthReport:
+    """
+    Relatório completo de saúde de um projeto
+    
+    Analisa múltiplas dimensões para dar um veredito
+    sobre o estado atual e futuro do projeto.
+    
+    Attributes:
+        project_id: ID do projeto analisado
+        project_name: Nome do projeto
+        health_status: Classificação geral (ProjectHealth enum)
+        health_score: Score numérico (0.0 a 100.0)
+        last_activity: Data da última atividade
+        days_since_activity: Dias desde última atividade
+        task_completion_rate: Taxa de conclusão de tarefas (%)
+        stalled_risk: Risco de estagnação (low/medium/high/critical)
+        insights: Lista de insights sobre este projeto
+        recommendations: Ações recomendadas
+        trend: Tendência (improving/stable/declining)
+    """
+    project_id: str = ""
+    project_name: str = ""
+    health_status: ProjectHealth = ProjectHealth.GOOD
+    health_score: float = 75.0
+    last_activity: Optional[str] = None
+    days_since_activity: int = 0
+    task_completion_rate: float = 0.0
+    stalled_risk: str = "low"
+    insights: List[Insight] = field(default_factory=list)
+    recommendations: List[str] = field(default_factory=list)
+    trend: str = "stable"  # improving, stable, declining
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Converte para dicionário serializável"""
+        return {
+            'project_id': self.project_id,
+            'project_name': self.project_name,
+            'health_status': self.health_status.value,
+            'health_score': round(self.health_score, 1),
+            'last_activity': self.last_activity,
+            'days_since_activity': self.days_since_activity,
+            'task_completion_rate': f"{self.task_completion_rate:.1f}%",
+            'stalled_risk': self.stalled_risk,
+            'insights': [i.to_dict() for i in self.insights],
+            'recommendations': self.recommendations,
+            'trend': self.trend
+        }
+
 
 @dataclass
 class WeeklySummary:
-    """Resumo semanal de insights"""
+    """
+    Resumo semanal completo de insights e métricas
+    
+    Gerado toda semana (geralmente domingo) para revisão TELOS.
+    
+    Attributes:
+        week_start: Início da semana (ISO format)
+        week_end: Fim da semana (ISO format)
+        total_insights: Total de insights gerados na semana
+        top_insights: Top 5 insights mais importantes
+        patterns_found: Padrões identificados
+        achievements: Conquistas/marcos atingidos
+        warnings: Alertas preventivos
+        recommendations: Recomendações priorizadas
+        productivity_score: Score médio de produtividade (0-100)
+        trend: Tendência da semana (improving/stable/declining)
+        telos_review: Análise das 5 dimensões TELOS
+    """
     week_start: str = ""
     week_end: str = ""
     total_insights: int = 0
@@ -158,761 +376,1701 @@ class WeeklySummary:
     warnings: List[str] = field(default_factory=list)
     recommendations: List[str] = field(default_factory=list)
     productivity_score: float = 0.0
-    trend: str = "stable"  # improving, stable, declining
+    trend: str = "stable"
+    telos_review: Dict[TelosDimension, str] = field(
+        default_factory=lambda: {dim: "" for dim in TelosDimension}
+    )
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Converte para dicionário serializável"""
+        return {
+            'week_start': self.week_start,
+            'week_end': self.week_end,
+            'total_insights': self.total_insights,
+            'top_insights': [i.to_dict() for i in self.top_insights[:5]],
+            'patterns_found': [p.to_dict() for p in self.patterns_found],
+            'achievements': self.achievements,
+            'warnings': self.warnings,
+            'recommendations': self.recommendations[:10],
+            'productivity_score': round(self.productivity_score, 1),
+            'trend': self.trend,
+            'telos_review': {
+                dim.value: texto 
+                for dim, texto in self.telos_review.items() 
+                if texto
+            }
+        }
+
+
+@dataclass
+class TelosReviewResult:
+    """
+    Resultado da revisão semanal TELOS completa
+    
+    Framework TELOS para review semanal estruturado:
+    - Time: Como usei meu tempo? Produtivo?
+    - Energy: Nível de energia? Descanso adequado?
+    - Light: Clareza mental? Aprendizados?
+    - Opportunity: Oportunidades percebidas/perdidas?
+    - Significance: Trabalho significativo? Impacto?
+    
+    Attributes:
+        period: Período da revisão (semana)
+        dimensions: Análise de cada dimensão TELOS
+        overall_score: Score geral (0-100)
+        key_insight: Principal insight da semana
+        next_week_focus: Foco principal para próxima semana
+        action_items: Itens de ação concretos
+        generated_at: Quando foi gerada
+    """
+    period: str = ""
+    dimensions: Dict[TelosDimension, Dict[str, Any]] = field(
+        default_factory=dict
+    )
+    overall_score: float = 0.0
+    key_insight: str = ""
+    next_week_focus: str = ""
+    action_items: List[str] = field(default_factory=list)
+    generated_at: datetime = field(default_factory=datetime.now)
+
 
 # ============================================
-# MAIN CLASS
+# CLASSE PRINCIPAL - INSIGHT GENERATOR
 # ============================================
 
 class InsightGenerator:
     """
-    Gerador de Insights Automáticos
+    Gerador de Insights Inteligentes v2.0 do Segundo Cérebro
     
-    Analisa continuamente seus dados para encontrar:
-    - Padrões de comportamento e produtividade
-    - Anomalias (dias muito bons/ruins)
-    - Oportunidades de melhoria
-    - Correlações entre diferentes métricas
-    - Tendências de longo prazo
+    Este é o "cérebro que PENSA" do sistema. Não só processa dados
+    (como os outros módulos), mas gera CONHECIMENTO, SABEDORIA e
+    RECOMENDAÇÕES acionáveis baseadas em análise profunda.
     
-    Uso:
-        generator = InsightGenerator(memory, lex_flow)
+    Funcionalidades principais:
+    - Análise de padrões de comportamento e produtividade
+    - Detecção de anomalias (dias muito bons/ruins)
+    - Identificação de oportunidades de melhoria
+    - Análise de saúde de projetos (risco de abandono)
+    - Geração de relatórios TELOS semanais
+    - Correlação entre métricas diferentes
+    - Aprendizado contínuo (salva descobertas na memória)
+    
+    Integração Lex Flow:
+    - Busca dados reais via get_dashboard(), get_projects(), etc.
+    - Analisa histórico de atividades
+    - Gera insights baseados em métricas reais
+    - Salva insights importantes como notas no Lex Flow
+    
+    Uso básico:
+        # Inicialização com dependências
+        generator = InsightGenerator(
+            memory_system=memory,
+            lex_flow_client=lex_flow,
+            decision_engine=decider  # opcional
+        )
         
-        # Insights diários
-        daily = generator.generate_daily_insights(today_stats)
+        # Insights diários (para morning briefing)
+        daily = generator.generate_daily_insights(stats_do_dia)
         
-        # Insights semanais
-        weekly = generator.generate_weekly_insights(week_analytics)
+        # Insights semanais (para Sunday review)
+        weekly = generator.generate_weekly_summary()
         
-        # Análise de projeto
-        health = generator.analyze_project_health(project_data)
+        # Análise de saúde de projetos
+        saude_projetos = generator.analyze_all_projects_health()
         
-        # Detecção de padrões
-        patterns = generator.detect_patterns(last_n_days=30)
+        # Relatório TELOS completo
+        telos = generator.generate_telos_review()
+        
+        # Detectar padrões personalizados
+        padroes = generator.detect_patterns(dias=30)
+    
+    Atributos:
+        _memory: Sistema de memória (para contexto e persistência)
+        _lex_flow: Cliente Lex Flow (dados reais para análise)
+        _decision: Motor de decisões (opcional, para priorização)
+        _cache: Cache interno para performance
+        _historical_data: Acumulador de dados históricos para tendências
     """
     
-    def __init__(self, memory: MemorySystem, lex_flow: LexFlowClient):
+    # Limites e thresholds configuráveis
+    DEFAULT_STALL_THRESHOLD_DAYS = 7      # Dias para considerar projeto parado
+    DEFAULT_ANOMALY_DEVIATION = 2.0       # Desvios padrão para anomalia
+    MIN_DATA_POINTS_FOR_PATTERN = 3       # Mínimo de ocorrências para padrão
+    MAX_INSIGHTS_DAILY = 8                # Limite de insights diários
+    MAX_INSIGHTS_WEEKLY = 20              # Limite de insights semanais
+    
+    def __init__(
+        self,
+        lex_flow_client: LexFlowClient,
+        memory_system: Optional[MemorySystem] = None,
+        decision_engine: Optional[DecisionEngine] = None
+    ):
         """
-        Inicializa o Gerador de Insights
+        Inicializa o Gerador de Insights v2.0
         
         Args:
-            memory: Sistema de memória carregado
-            lex_flow: Cliente Lex Flow conectado
+            lex_flow_client: Cliente Lex Flow CONECTADO (obrigatório para dados reais)
+            memory_system: Sistema de memória opcional (contexto + persistência)
+            decision_engine: Motor de decisões opcional (priorização avançada)
         """
-        self.memory = memory
-        self.lex_flow = lex_flow
+        # Dependências principais
+        self._lex_flow = lex_flow_client
+        self._memory = memory_system
+        self._decision = decision_engine
         
         # Cache de insights recentes (para evitar repetição)
         self._recent_insights_cache: List[str] = []
-        self._max_cache_size = 100
+        self._max_cache_size = 200
         
-        # Histórico para detecção de tendências
+        # Histórico para detecção de tendências (acumula ao longo do tempo)
         self._historical_data: Dict[str, List] = defaultdict(list)
         
-        log.info("💡 Insight Generator inicializado")
-        log.info(f"   Memory: {type(memory).__name__}")
-        log.info(f"   Lex Flow: Conectado={lex_flow.is_authenticated()}")
+        # Estatísticas de uso
+        self._stats = {
+            'insights_gerados': 0,
+            'padroes_detectados': 0,
+            'relatorios_telos': 0,
+            'analises_projetos': 0,
+            'erros': 0
+        }
+        
+        # Log de inicialização
+        logger_insight.info("=" * 70)
+        logger_insight.info("💡 INSIGHT GENERATOR v2.0 INICIALIZADO")
+        logger_insight.info(f"   Lex Flow: {'✅ Conectado' if lex_flow_client else '⚠️ Não configurado'}")
+        logger_insight.info(f"   Memory: {'✅ Disponível' if memory_system else '⚠️ Não configurado'}")
+        logger_insight.info(f"   Decision Engine: {'✅ Disponível' if decision_engine else '⚠️ Não configurado'}")
+        logger_insight.info("=" * 70)
     
     # ========================================
-    # MÉTODOS PRINCIPAIS
+    # MÉTODOS PRINCIPAIS PÚBLICOS
     # ========================================
     
-    def generate_daily_insights(self, stats: Dict = None) -> List[str]:
+    def generate_daily_insights(self, stats: Optional[Dict] = None) -> List[Insight]:
         """
         GERA INSIGHTS DIÁRIOS RÁPIDOS
         
-        Analisa as atividades do dia e gera 3-5 insights
+        Analisa as atividades do dia e gera 3-8 insights
         curtos e acionáveis para o briefing matinal.
         
+        Estes insights são projetados para serem consumidos
+        rapidamente (menos de 30 segundos cada) e motivarem
+        ação imediata.
+        
         Args:
-            stats: Estatísticas rápidas do dia (do Lex Flow)
+            stats: Estatísticas rápidas do dia (do Lex Flow dashboard).
+                   Se None, busca automaticamente do Lex Flow.
             
         Returns:
-            Lista de strings com insights
+            Lista de objetos Insight ordenados por prioridade (maior primeiro)
         """
-        log.info("🔍 Gerando insights diários...")
+        logger_insight.info("🔍 Gerando INSIGHTS DIÁRIOS...")
+        self._stats['insights_gerados'] += 1
         
-        insights = []
+        insights: List[Insight] = []
         
         try:
-            # Se não recebeu stats, buscar do Lex Flow
-            if not stats:
-                dashboard = self.lex_flow.get_dashboard()
-                stats = dashboard.get('quick_stats', {})
+            # === PASSO 1: Obter dados (do argumento ou do Lex Flow) ===
+            dados_dia = stats
             
-            # 1. Análise de produtividade do dia
-            productivity_insight = self._analyze_daily_productivity(stats)
-            if productivity_insight:
-                insights.append(productivity_insight)
+            if not dados_dia and self._lex_flow:
+                logger_insight.info("   Buscando dados do dia no Lex Flow...")
+                dados_dia = self._buscar_stats_diarios_lexflow()
             
-            # 2. Verificar conquistas do dia
-            achievements = self._detect_daily_achievements(stats)
-            insights.extend(achievements)
+            if not dados_dia:
+                dados_dia = {}  # Continuar com dados vazios (modo degradado)
             
-            # 3. Alertas baseados em comparativo histórico
-            warnings = self._generate_daily_warnings(stats)
-            insights.extend(warnings)
+            # === PASSO 2: Análise de Produtividade ===
+            insight_produtividade = self._analizar_produtividade_diaria(dados_dia)
+            if insight_produtividade:
+                insights.append(insight_produtividade)
             
-            # 4. Sugestão contextual
-            suggestion = self._generate_contextual_suggestion(stats)
-            if suggestion:
-                insights.append(suggestion)
+            # === PASSO 3: Detecção de Conquistas/Achievements ===
+            conquistas = self._detectar_conquistas_diarias(dados_dia)
+            insights.extend(conquistas)
             
-            # Limitar a 5 insights máximos
-            insights = insights[:5]
+            #=== PASSO 4: Alertas e Warnings ===
+            alertas = self._gerar_alertas_diarios(dados_dia)
+            insights.extend(alertas)
             
-            log.info(f"   ✅ Gerados {len(insights)} insights diários")
+            # === PASSO 5: Sugestão Contextual Personalizada ===
+            sugestao = self._gerar_sugestao_contextual(dados_dia)
+            if sugestao:
+                insights.append(sugestao)
             
-        except Exception as e:
-            log.error(f"   ❌ Erro gerando insights diários: {e}")
-            insights.append("⚠️ Não foi possível analisar dados hoje")
+            # === PASSO 6: Análise de Padrão Recorrente ===
+            if len(self._historical_data.get('daily_productivity', [])) >= 3:
+                padrao = self._detectar_padrao_recorrente()
+                if padrao:
+                    insights.append(padrao)
+            
+            # === PASSO 7: Ordenar e Limitar ===
+            # Ordenar por prioridade (descendente)
+            insights.sort(key=lambda x: x.priority, reverse=True)
+            
+            # Aplicar limite máximo
+            insights = insights[:self.MAX_INSIGHTS_DAILY]
+            
+            # Armazenar no cache para evitar repetição
+            for insight in insights:
+                self._adicionar_ao_cache(insight.id)
+            
+            # Salvar dados históricos para futuras análises de tendência
+            self._armazenar_historico(dados_dia)
+            
+            logger_insight.info(
+                f"   ✅ {len(insights)} insights diários gerados "
+                f"(conquistas: {len(conquistas)}, alertas: {len(alertas)})"
+            )
+            
+        except Exception as erro:
+            logger_insight.error(f"❌ Erro gerando insights diários: {erro}", exc_info=True)
+            
+            # Criar insight de erro (para não retornar vazio)
+            insights.append(Insight(
+                type=InsightType.WARNING,
+                title="⚠️ Sistema de Insights Parcialmente Indisponível",
+                description=(
+                    f"Não foi possível completar a análise hoje. "
+                    f"Erro técnico: {str(erro)[:100]}"
+                ),
+                confidence=InsightConfidence.HIGH,
+                category="system",
+                priority=8
+            ))
+            self._stats['erros'] += 1
         
         return insights
     
-    def generate_hourly_insights(self) -> List[Dict]:
+    def generate_weekly_summary(self) -> WeeklySummary:
         """
-        GERA INSIGHTS A CADA HORA (para heartbeat)
+        GERA RESUMO SEMANAL COMPLETO DE INSIGHTS
         
-        Mais leve que o diário, focado em anomalias
-        e alertas imediatos.
+        Compila todos os insights da semana, identifica
+        padrões de longo prazo, calcula tendências, e gera
+        recomendações estratégicas para a próxima semana.
+        
+        Deve ser executado preferencialmente no domingo à noite
+        para preparação da semana seguinte.
         
         Returns:
-            Lista de dicionários com insights
+            WeeklySummary com análise completa da semana
         """
-        insights = []
+        logger_insight.info("📊 Gerando RESUMO SEMANAL...")
+        
+        resumo = WeeklySummary()
         
         try:
-            # Buscar dados recentes
-            recent_activity = self.lex_flow.get_recent_activity(hours=1)
+            # Calcular período da semana
+            hoje = datetime.now()
+            inicio_semana = hoje - timedelta(days=hoje.weekday())  # Segunda desta semana
+            fim_semana = inicio_semana + timedelta(days=6)        # Domingo desta semana
             
-            if not recent_activity:
-                return [{"text": "Sem atividade recente registrada", "type": "info"}]
+            resumo.week_start = inicio_semana.strftime('%Y-%m-%d')
+            resumo.week_end = fim_semana.strftime('%Y-%m-%d')
             
-            # Detectar atividade anormalmente alta/baixa
-            activity_count = len(recent_activity)
+            # === SEÇÃO 1: Coletar dados da semana ===
+            dados_semana = self._coletar_dados_semanais(inicio_semana, fim_semana)
             
-            if activity_count > 20:  # Muito produtivo!
-                insights.append({
-                    "text": f"🔥 Hora muito produtiva! {activity_count} ações registradas",
-                    "type": "achievement",
-                    "confidence": "high"
-                })
-            elif activity_count == 0 and self._is_work_hour():
-                insights.append({
-                    "text": "💤 Nenhuma atividade na última hora. Hora de fazer uma pausa ou retomar?",
-                    "type": "warning",
-                    "confidence": "medium"
-                })
+            # === SEÇÃO 2: Análise de Produtividade ===
+            score_produtividade = self._calcular_score_produtividade_semanal(dados_semana)
+            resumo.productivity_score = score_produtividade
             
-            # Verificar projetos com atividade recente
-            projects_active = self._extract_active_projects_from_activity(recent_activity)
-            if projects_active:
-                insights.append({
-                    "text": f"📊 Projetos ativos nesta hora: {', '.join(projects_active[:3])}",
-                    "type": "pattern",
-                    "confidence": "high"
-                })
-                
-        except Exception as e:
-            log.debug(f"Erro em insights horários: {e}")
+            # === SEÇÃO 3: Top Insights da Semana ===
+            top_insights = self._gerar_top_insights_semanais(dados_semana)
+            resumo.top_insights = top_insights[:5]
+            resumo.total_insights = len(top_insights)
+            
+            # === SEÇÃO 4: Detecção de Padrões ===
+            padroes = self._detectar_padroes_semanais(dados_semana)
+            resumo.patterns_found = padroes
+            self._stats['padroes_detectados'] += len(padroes)
+            
+            # === SEÇÃO 5: Conquistas da Semana ===
+            conquistas = self._identificar_conquistas_semanais(dados_semana)
+            resumo.achievements = conquistas
+            
+            # === SEÇÃO 6: Warnings e Riscos ===
+            warnings = self._gerar_warnings_semanais(dados_semana)
+            resumo.warnings = warnings
+            
+            # === SEÇÃO 7: Recomendações Estratégicas ===
+            recomendacoes = self._gerar_recomendacoes_semanais(
+                resumo.productivity_score,
+                padroes,
+                warnings
+            )
+            resumo.recommendations = recomendacoes[:10]
+            
+            # === SEÇÃO 8: Determinar Tendência ===
+            resumo.trend = self._determinar_tendencia_semanal(dados_semana)
+            
+            # === SEÇÃO 9: Salvar na Memória (opcional) ===
+            if self._memory:
+                self._salvar_resumo_memoria(resumo)
+            
+            logger_insight.info(
+                f"   ✅ Resumo semanal gerado:"
+                f"\n      Score: {resumo.productivity_score:.1f}/100"
+                f"\n      Insights: {resumo.total_insights}"
+                f"\n      Padrões: {len(resumo.patterns_found)}"
+                f"\n      Tendência: {resumo.trend}"
+            )
+            
+        except Exception as erro:
+            logger_insight.error(f"❌ Erro gerando resumo semanal: {erro}", exc_info=True)
+            self._stats['erros'] += 1
         
-        return insights[:3]  # Máximo 3 insights por hora
+        return resumo
     
-    def generate_weekly_insights(self, analytics: Dict = None) -> WeeklySummary:
+    def generate_telos_review(self) -> TelosReviewResult:
         """
-        GERA ANÁLISE SEMANAL COMPLETA
+        GERA RELATÓRIO COMPLETO TELOS (Weekly Review)
         
-        Profunda análise de toda a semana incluindo:
-        - Tendências de produtividade
-        - Padrões comportamentais
-        - Saúde dos projetos
-        - Conquistas e marcos
-        - Recomendações para próxima semana
+        O framework TELOS analisa 5 dimensões holísticas:
+        - TIME: Gestão do tempo e energia durante a semana
+        - ENERGY: Nível físico, mental, e emocional
+        - LIGHT: Clareza mental, aprendizados, insights
+        - OPPORTUNITY: Oportunidades identificadas/perdidas
+        - SIGNIFICANCE: Impacto e significado do trabalho realizado
+        
+        Este é o review mais completo e deve ser usado para
+        planejamento estratégico semanal.
+        
+        Returns:
+            TelosReviewResult com análise completa das 5 dimensões
+        """
+        logger_insight.info("🌟 Gerando RELATÓRIO TELOS (Weekly Review)...")
+        self._stats['relatorios_telos'] += 1
+        
+        resultado = TelosReviewResult()
+        resultado.periodo = datetime.now().strftime('%Y-%m-%d')
+        resultado.generated_at = datetime.now()
+        
+        try:
+            # Coletar dados necessários
+            dados_semana = self._coletar_dados_para_telos()
+            
+            # === DIMENSÃO 1: TIME (Tempo) ===
+            resultado.dimensions[TelosDimension.TIME] = (
+                self._analisar_dimensao_time(dados_semana)
+            )
+            
+            # === DIMENSÃO 2: ENERGY (Energia) ===
+            resultado.dimensions[TelosDimension.ENERGY] = (
+                self._analisar_dimensao_energy(dados_semana)
+            )
+            
+            # === DIMENSÃO 3: LIGHT (Clareza/Luz) ===
+            resultado.dimensions[TelosDimension.LIGHT] = (
+                self._analisar_dimensao_light(dados_semana)
+            )
+            
+            # === DIMENSÃO 4: OPPORTUNITY (Oportunidades) ===
+            resultado.dimensions[TelosDimension.OPPORTUNITY] = (
+                self._analisar_dimensao_opportunity(dados_semana)
+            )
+            
+            # === DIMENSÃO 5: SIGNIFICANCE (Significado) ===
+            resultado.dimensions[TelosDimension.SIGNIFICANCE] = (
+                self._analisar_dimensao_significance(dados_semana)
+            )
+            
+            # === CALCULAR SCORE GERAL ===
+            resultado.overall_score = self._calcular_score_telos_geral(resultado.dimensions)
+            
+            # === GERAR KEY INSIGHT PRINCIPAL ===
+            resultado.key_insight = self._extrair_key_insight_telos(resultado.dimensions)
+            
+            # === DEFINIR FOCO PRÓXIMA SEMANA ===
+            resultado.next_week_focus = (
+                self._sugerir_foco_proxima_semana(resultado.dimensions)
+            )
+            
+            # === GERAR ITENS DE AÇÃO ===
+            resultado.action_items = self._gerar_action_items_telos(resultado)
+            
+            logger_insight.info(
+                f"   ✅ Relatório TELOS concluído"
+                f"\n      Score Geral: {resultado.overall_score:.1f}/100"
+                f"\n      Key Insight: {resultado.key_insight[:80]}..."
+            )
+            
+        except Exception as erro:
+            logger_insight.error(f"❌ Erro gerando relatório TELOS: {erro}", exc_info=True)
+            self._stats['erros'] += 1
+        
+        return resultado
+    
+    def analyze_all_projects_health(self) -> List[ProjectHealthReport]:
+        """
+        ANALISA SAÚDE DE TODOS OS PROJETOS ATIVOS
+        
+        Para cada projeto ativo no Lex Flow, gera um relatório
+        de saúde completo com:
+        - Score de saúde (0-100)
+        - Risco de estagnação
+        - Insights específicos do projeto
+        - Recomendações de ação
+        
+        Returns:
+            Lista de ProjectHealthReport ordenada por risco (crítico primeiro)
+        """
+        logger_insight.info("🏥 Analisando SAÚDE de TODOS os PROJETOS...")
+        self._stats['analises_projetos'] += 1
+        
+        relatorios: List[ProjectHealthReport] = []
+        
+        if not self._lex_flow:
+            logger_insight.warning("   ⚠️ Lex Flow não disponível, pulando análise")
+            return relatorios
+        
+        try:
+            # Obter lista de projetos do Lex Flow
+            projetos = self._lex_flow.get_projects()
+            
+            if not projetos:
+                logger_insight.info("   Nenhum projeto encontrado no Lex Flow")
+                return relatorios
+            
+            # Garantir que é lista
+            if isinstance(projetos, dict):
+                projetos = projetos.get('projects', projetos.get('data', []))
+            
+            if not isinstance(projetos, list):
+                logger_insight.warning(f"   Formato inesperado: {type(projetos)}")
+                return relatorios
+            
+            logger_insight.info(f"   Encontrados {len(projetos)} projetos para analisar")
+            
+            # Analisar cada projeto individualmente
+            for projeto in projetos:
+                try:
+                    relatorio = self._analisar_saude_projeto_individual(projeto)
+                    if relatorio:
+                        relatorios.append(relatorio)
+                        
+                except Exception as erro_projeto:
+                    logger_insight.debug(
+                        f"   Erro analisando projeto {projeto.get('id', '?')}: {erro_projeto}"
+                    )
+            
+            # Ordenar por saúde (pior primeiro = maior prioridade)
+            relatorios.sort(key=lambda x: x.health_score)
+            
+            logger_insight.info(
+                f"   ✅ Análise concluída: {len(relatorios)} projetos analisados"
+            )
+            
+        except AttributeError:
+            logger_insight.warning("   Método get_projects() não disponível no LexFlowClient")
+            
+        except Exception as erro:
+            logger_insight.error(f"   ❌ Erro na análise de projetos: {erro}")
+            self._stats['erros'] += 1
+        
+        return relatorios
+    
+    def detect_patterns(self, dias: int = 30) -> List[Pattern]:
+        """
+        DETECTA PADRÕES EM DADOS HISTÓRICOS
+        
+        Analisa os últimos N dias de dados para identificar
+        comportamentos recorrentes que podem ser aproveitados
+        (bons hábitos) ou corrigidos (maus hábitos).
+        
+        Tipos de padrões detectados:
+        - Horários de pico de produtividade
+        - Dias da semana mais/menos produtivos
+        - Tipos de tarefa que demoram mais
+        - Frequência de capturas rápidas
+        - Padrões de procrastinação
         
         Args:
-            analytics: Dados analíticos da semana (do Lex Flow)
+            dias: Quantidade de dias para olhar para trás (default: 30)
             
         Returns:
-            WeeklySummary com análise completa
+            Lista de Pattern detectados, ordenados por frequência
         """
-        log.info("📊 Gerando análise semanal de insights...")
+        logger_insight.info(f"🔄 Detectando PADRÕES (últimos {dias} dias)...")
         
-        summary = WeekStart=(datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
-        summary.week_end = datetime.now().strftime("%Y-%m-%d")
+        padroes: List[Pattern] = []
         
         try:
-            # Se não recebeu analytics, buscar do Lex Flow
-            if not analytics:
-                analytics = self.lex_flow.get_analytics(period='weekly')
+            # Coletar dados históricos
+            historico = self._obter_historico_dias(dias)
             
-            # 1. Calcular score de produtividade
-            summary.productivity_score = self._calculate_productivity_score(analytics)
+            if not historico or len(historico) < 3:
+                logger_insight.warning(
+                    f"   Dados insuficientes para detecção de padrões "
+                    f"(precisa de pelo menos 3 dias, tem {len(historico) if historico else 0})"
+                )
+                return padroes
             
-            # 2. Determinar tendência
-            summary.trend = self._determine_productivity_trend(analytics)
+            # === PADRÃO 1: Produtividade por Dia da Semana ===
+            padrao_dia_semana = self._detectar_padrao_dia_semana(historico)
+            if padrao_dia_semana:
+                padroes.append(padrao_dia_semana)
             
-            # 3. Encontrar padrões da semana
-            patterns = self.detect_patterns(last_n_days=7)
-            summary.patterns_found = patterns
+            # === PADRÃO 2: Produtividade por Horário ===
+            padrao_horario = self._detectar_padrao_horario(historico)
+            if padrao_horario:
+                padroes.append(padrao_horario)
             
-            # 4. Identificar conquistas
-            summary.achievements = self._identify_weekly_achievements(analytics)
+            # === PADRÃO 3: Tipos de Tarefa Mais Frequentes ===
+            padrao_tipos_tarefa = self._detectar_padrao_tipos_tarefa(historico)
+            if padrao_tipos_tarefa:
+                padroes.append(padrao_tipos_tarefa)
             
-            # 5. Gerar alertas/warnings
-            summary.warnings = self._generate_weekly_warnings(analytics)
+            # === PADRÃO 4: Sequência de Atividades ===
+            padrao_sequencia = self._detectar_padrao_sequencia(historico)
+            if padrao_sequencia:
+                padroes.append(padrao_sequencia)
             
-            # 6. Criar recomendações acionáveis
-            summary.recommendations = self._generate_weekly_recommendations(summary)
+            # Ordenar por frequência (mais frequente primeiro)
+            padroes.sort(key=lambda x: x.frequency, reverse=True)
             
-            # 7. Top insights da semana
-            all_insights = self._compile_top_weekly_insights(summary)
-            summary.top_insights = all_insights[:5]
-            summary.total_insights = len(all_insights)
+            self._stats['padroes_detectados'] += len(padroes)
             
-            log.info(f"   ✅ Análise semanal concluída (score: {summary.productivity_score:.1f})")
+            logger_insight.info(
+                f"   ✅ {len(padroes)} padrões detectados:"
+                + ''.join([f"\n      - {p.name} ({p.frequency}x)" for p in padroes])
+            )
             
-        except Exception as e:
-            log.error(f"   ❌ Erro na análise semanal: {e}")
-            summary.recommendations.append("Revisar configuração do sistema para análises futuras")
+        except Exception as erro:
+            logger_insight.error(f"❌ Erro detectando padrões: {erro}", exc_info=True)
+            self._stats['erros'] += 1
         
-        return summary
-    
-    def analyze_project_health(self, project_data: Dict) -> Dict:
-        """
-        ANALISA SAÚDE DE UM PROJETO ESPECÍFICO
-        
-        Avalia multiple dimensions:
-        - Frequência de atividade
-        - Progresso em relação ao esperado
-        - Tarefas concluídas vs pendentes
-        - Tempo desde última atualização
-        - Comparativo com outros projetos
-        
-        Args:
-            project_data: Dados completos do projeto
-            
-        Returns:
-            Dicionário com análise de saúde
-        """
-        health_analysis = {
-            "project_name": project_data.get('title', project_data.get('name', 'Unknown')),
-            "health_status": ProjectHealth.GOOD.value,
-            "health_score": 75.0,  # 0-100
-            "last_activity": None,
-            "days_since_last_activity": None,
-            "activity_frequency": "normal",
-            "progress_percentage": project_data.get('progress', 0),
-            "tasks_summary": {},
-            "strengths": [],
-            "weaknesses": [],
-            "recommendations": [],
-            "risk_factors": []
-        }
-        
-        try:
-            # 1. Última atividade
-            last_updated = project_data.get('updated_at', project_data.get('last_modified'))
-            if last_updated:
-                health_analysis["last_activity"] = last_updated
-                last_date = datetime.fromisoformat(last_updated.replace('Z', '+00:00'))
-                days_since = (datetime.now(last_date.tzinfo) - last_date).days
-                health_analysis["days_since_last_activity"] = days_since
-                
-                # Classificar based on dias
-                if days_since <= 1:
-                    health_analysis["activity_frequency"] = "very_high"
-                    health_analysis["health_score"] = min(100, health_analysis["health_score"] + 10)
-                elif days_since <= 3:
-                    health_analysis["activity_frequency"] = "normal"
-                elif days_since <= 7:
-                    health_analysis["activity_frequency"] = "low"
-                    health_analysis["health_status"] = ProjectHealth.ATTENTION.value
-                    health_analysis["health_score"] -= 15
-                else:
-                    health_analysis["activity_frequency"] = "stalled"
-                    health_analysis["health_status"] = ProjectHealth.STALLED.value
-                    health_analysis["health_score"] -= 30
-                    health_analysis["risk_factors"].append(f"Parado há {days_since} dias")
-            
-            # 2. Progresso das tarefas
-            tasks = project_data.get('tasks', [])
-            if tasks:
-                total = len(tasks)
-                done = len([t for t in tasks if t.get('status') == 'done'])
-                in_progress = len([t for t in tasks if t.get('status') == 'in_progress'])
-                
-                health_analysis["tasks_summary"] = {
-                    "total": total,
-                    "completed": done,
-                    "in_progress": in_progress,
-                    "pending": total - done - in_progress,
-                    "completion_rate": (done / total * 100) if total > 0 else 0
-                }
-                
-                # Ajustar score baseado em completion rate
-                completion_rate = health_analysis["tasks_summary"]["completion_rate"]
-                if completion_rate > 70:
-                    health_analysis["strengths"].append(f"Alta taxa de conclusão ({completion_rate:.0f}%)")
-                    health_analysis["health_score"] = min(100, health_analysis["health_score"] + 10)
-                elif completion_rate < 30:
-                    health_analysis["weaknesses"].append(f"Baixa taxa de conclusão ({completion_rate:.0f}%)")
-                    health_analysis["health_score"] -= 10
-            
-            # 3. Garantir score entre 0-100
-            health_analysis["health_score"] = max(0, min(100, health_analysis["health_score"]))
-            
-            # 4. Gerar recomendações baseadas na análise
-            health_analysis["recommendations"] = self._generate_project_recommendations(health_analysis)
-            
-        except Exception as e:
-            log.error(f"Erro analisando saúde do projeto: {e}")
-            health_analysis["recommendations"].append("Revisar dados do projeto manualmente")
-        
-        return health_analysis
-    
-    def detect_patterns(self, last_n_days: int = 30) -> List[Pattern]:
-        """
-        DETECTA PADRÕES NOS SEUS DADOS
-        
-        Busca padrões como:
-        - Dias/horários mais produtivos
-        - Tipos de tarefas recorrentes
-        - Projetos que sempre travam juntos
-        - Correlações entre hábitos e produtividade
-        - Ciclos de energia/motivação
-        
-        Args:
-            last_n_days: Quantos dias olhar para trás
-            
-        Returns:
-            Lista de Pattern objects encontrados
-        """
-        log.info(f"🔍 Detectando padrões (últimos {last_n_days} dias)...")
-        
-        patterns = []
-        
-        try:
-            # Buscar dados históricos do Lex Flow
-            historical_data = self.lex_flow.get_historical_data(days=last_n_days)
-            
-            if not historical_data:
-                log.warning("   ⚠️  Dados históricos insuficientes para detecção de padrões")
-                return patterns
-            
-            # Padrão 1: Produtividade por dia da semana
-            weekday_pattern = self._analyze_productivity_by_weekday(historical_data)
-            if weekday_pattern:
-                patterns.append(weekday_pattern)
-            
-            # Padrão 2: Produtividade por horário
-            hourly_pattern = self._analyze_productivity_by_hour(historical_data)
-            if hourly_pattern:
-                patterns.append(hourly_pattern)
-            
-            # Padrão 3: Projetos frequentemente parados
-            stalled_pattern = self._detect_frequently_stalled_projects(historical_data)
-            if stalled_pattern:
-                patterns.append(stalled_pattern)
-            
-            # Padrão 4: Tipos de tarefas mais comuns
-            task_type_pattern = self._analyze_common_task_types(historical_data)
-            if task_type_pattern:
-                patterns.append(task_type_pattern)
-            
-            # Padrão 5: Correlação entre métricas
-            correlation = self._find_metric_correlations(historical_data)
-            if correlation:
-                patterns.extend(correlation)
-            
-            log.info(f"   ✅ {len(patterns)} padrões detectados")
-            
-        except Exception as e:
-            log.error(f"   ❌ Erro detectando padrões: {e}")
-        
-        return patterns
+        return padroes
     
     # ========================================
-    # MÉTODOS PRIVADOS - ANÁLISE DIÁRIA
+    # MÉTODOS PRIVADOS - COLETA DE DADOS
     # ========================================
     
-    def _analyze_daily_productivity(self, stats: Dict) -> Optional[str]:
-        """Analisa produtividade do dia e gera insight"""
-        if not stats:
+    def _buscar_stats_diarios_lexflow(self) -> Optional[Dict]:
+        """
+        Busca estatísticas diárias do dashboard Lex Flow
+        
+        Returns:
+            Dicionário com stats ou None se indisponível
+        """
+        if not self._lex_flow:
             return None
         
-        # Extrair métricas relevantes
-        tasks_done = stats.get('tasks_completed_today', 0)
-        pomodoros = stats.get('pomodoros_today', 0)
-        notes_added = stats.get('notes_created_today', 0)
-        
-        # Lógica de insight
-        if tasks_done >= 10:
-            return f"🎯 Dia super produtivo! {tasks_done} tarefas concluídas"
-        elif tasks_done >= 5:
-            return f"✅ Bom ritmo hoje: {tasks_done} tarefas feitas"
-        elif tasks_done >= 1:
-            return f"📝 Progresso constante: {tasks_done} tarefa(s) concluída(s)"
-        elif pomodoros > 0:
-            return f"🍅 Foco em deep work: {pomodoros} pomodoro(s) realizado(s)"
-        elif notes_added > 0:
-            return f"💭 Dia de ideias: {notes_added} nota(s) capturada(s)"
-        else:
-            return "🌅 Novo dia começando. Qual será sua primeira vitória?"
-    
-    def _detect_daily_achievements(self, stats: Dict) -> List[str]:
-        """Detecta conquistas/marcos do dia"""
-        achievements = []
-        
-        if not stats:
-            return achievements
-        
-        # Metas simbólicas
-        if stats.get('tasks_completed_today', 0) >= 10:
-            achievements.append("🏆 MARCO: 10+ tarefas em um dia!")
-        
-        if stats.get('pomodoros_today', 0) >= 8:
-            achievements.append("🏆 MARCO: 8+ pomodoros de foco profundo!")
-        
-        if stats.get('streak_days', 0) >= 7:
-            achievements.append("🔥 SEMANA PERFEITA: 7+ dias consecutivos de atividade!")
-        
-        # Inbox zerado
-        if stats.get('inbox_size', 1) == 0:
-            achievements.append("🧹 INBOX ZERADO: Tudo processado e organizado!")
-        
-        return achievements
-    
-    def _generate_daily_warnings(self, stats: Dict) -> List[str]:
-        """Gera alertas baseados em comparativos"""
-        warnings = []
-        
-        if not stats:
-            return warnings
-        
-        # Comparar com ontem
-        yesterday_tasks = stats.get('tasks_completed_yesterday', 0)
-        today_tasks = stats.get('tasks_completed_today', 0)
-        
-        if yesterday_tasks > 0 and today_tasks > 0:
-            drop_percentage = ((yesterday_tasks - today_tasks) / yesterday_tasks) * 100
+        try:
+            if hasattr(self._lex_flow, 'get_dashboard'):
+                dashboard = self._lex_flow.get_dashboard()
+                
+                if dashboard and isinstance(dashboard, dict):
+                    # Extrair campos relevantes
+                    return {
+                        'pomodoros': dashboard.get('pomodoros_today', 0),
+                        'tarefas_concluidas': dashboard.get('tasks_completed', 0),
+                        'notas_rapidas': dashboard.get('quick_notes_count', 0),
+                        'inbox_size': dashboard.get('inbox_count', 0),
+                        'projetos_ativos': dashboard.get('active_projects', 0),
+                        'score_produtividade': dashboard.get('productivity_score', 0),
+                        'streak_dias': dashboard.get('streak_days', 0),
+                        'raw': dashboard  # Manter original para referência
+                    }
+                
+        except AttributeError:
+            logger_insight.debug("   get_dashboard() não disponível")
             
-            if drop_percentage >= 50:
-                warnings.append(f"⚠️ Produtividade {drop_percentage:.0f}% menor que ontem")
-            elif drop_percentage >= 20:
-                warnings.append(f"📉 Produtividade {drop_percentage:.0f}% abaixo de ontem")
+        except Exception as erro:
+            logger_insight.debug(f"   Erro buscando stats: {erro}")
         
-        # Inbox grande
-        inbox_size = stats.get('inbox_size', 0)
-        if inbox_size >= 20:
-            warnings.append(f"📥 Inbox acumulada: {inbox_size} itens pendentes")
-        
-        # Projetos parados
-        stalled_count = stats.get('stalled_projects', 0)
-        if stalled_count > 0:
-            warnings.append(f"⚠️ {stalled_count} projeto(s) precisa(m) atenção")
-        
-        return warnings[:2]  # Máximo 2 warnings por dia
+        return None
     
-    def _generate_contextual_suggestion(self, stats: Dict) -> Optional[str]:
-        """Gera sugestão contextual baseada no momento atual"""
-        hour = datetime.now().hour
+    def _coletar_dados_semanais(
+        self, 
+        inicio: datetime, 
+        fim: datetime
+    ) -> Dict[str, Any]:
+        """
+        Coleta dados agregados da semana para análise
         
-        if 6 <= hour < 9:
-            return "☀️ Manhã é ideal para tarefas que exigem foco profundo"
-        elif 9 <= hour < 12:
-            return "🚀 Horário de pico cognitivo. Aproveite para trabalhos complexos!"
-        elif 12 <= hour < 14:
-            return "🍽️ Pausa para almoço. Boa hora para leitura leve ou organização"
-        elif 14 <= hour < 17:
-            return "💪 Tarde produtiva. Ótimo para reuniões e colaboração"
-        elif 17 <= hour < 20:
-            return "🌆 Final de tarde. Ótimo para revisar progresso do dia"
-        elif 20 <= hour < 23:
-            return "🌙 Noite. Momento para planejamento ou aprendizado relaxado"
-        else:
-            return "😴 Madrugada. Descanse bem para amanhã ser produtivo!"
+        Args:
+            inicio: Data inicial da semana
+            fim: Data final da semana
+            
+        Returns:
+            Dicionário com dados semanais agregados
+        """
+        dados = {
+            'periodo': {'inicio': inicio.isoformat(), 'fim': fim.isoformat()},
+            'dias_analisados': 0,
+            'total_pomodoros': 0,
+            'total_tarefas': 0,
+            'total_notas': 0,
+            'por_dia': [],
+            'projetos_trabalhados': set(),
+            'metricas_diarias': []
+        }
+        
+        if self._lex_flow:
+            try:
+                # Tentar obter analytics/semanal se existir
+                if hasattr(self._lex_flow, 'get_weekly_analytics'):
+                    analytics = self._lex_flow.get_weekly_analytics(
+                        start_date=inicio.strftime('%Y-%m-%d'),
+                        end_date=fim.strftime('%Y-%m-%d')
+                    )
+                    if analytics:
+                        dados.update(analytics)
+                        return dados
+                        
+            except AttributeError:
+                pass
+            except Exception as erro:
+                logger_insight.debug(f"Erro coletando dados semanais: {erro}")
+        
+        # Fallback: usar dados históricos acumulados localmente
+        dados['por_dia'] = self._historical_data.get('daily_stats', [])[-7:]
+        dados['dias_analisados'] = len(dados['por_dia'])
+        
+        # Agregar totais
+        for dia in dados['por_dia']:
+            if isinstance(dia, dict):
+                dados['total_pomodoros'] += dia.get('pomodoros', 0)
+                dados['total_tarefas'] += dia.get('tarefas', 0)
+                dados['total_notas'] += dia.get('notas', 0)
+        
+        return dados
+    
+    def _coletar_dados_para_telos(self) -> Dict[str, Any]:
+        """
+        Coleta dados específicos para análise TELOS
+        
+        Retorna dados estruturados para as 5 dimensões.
+        """
+        dados = {}
+        
+        # Dados do Lex Flow
+        if self._lex_flow:
+            try:
+                dashboard = self._buscar_stats_diarios_lexflow()
+                if dashboard:
+                    dados['dashboard'] = dashboard
+                
+                # Projetos
+                if hasattr(self._lex_flow, 'get_projects'):
+                    projetos = self._lex_flow.get_projects()
+                    if projetos:
+                        dados['projetos'] = projetos
+                        
+            except Exception:
+                pass
+        
+        # Dados da Memory (lições, perfil)
+        if self._memory:
+            try:
+                dados['licoes_recentes'] = self._memory.get_recent_lessons(quantidade=7)
+            except Exception:
+                pass
+        
+        # Dados históricos acumulados
+        dados['historico_local'] = dict(self._historical_data)
+        
+        return dados
+    
+    def _obter_historico_dias(self, dias: int) -> List[Dict]:
+        """
+        Obtém dados históricos dos últimos N dias
+        
+        Args:
+            dias: Quantidade de dias
+            
+        Returns:
+            Lista de dicionários (um por dia)
+        """
+        # Tentar buscar do Lex Flow primeiro
+        if self._lex_flow:
+            try:
+                if hasattr(self._lex_flow, 'get_activity_history'):
+                    historico = self._lex_flow.get_activity_history(days=dias)
+                    if historico and isinstance(historico, list):
+                        return historico
+            except Exception:
+                pass
+        
+        # Fallback: usar dados locais acumulados
+        return self._historical_data.get('daily_stats', [])[-dias:]
     
     # ========================================
-    # MÉTODOS PRIVADOS - ANÁLISE SEMANAL
+    # MÉTODOS PRIVADOS - ANÁLISE E GERAÇÃO
     # ========================================
     
-    def _calculate_productivity_score(self, analytics: Dict) -> float:
-        """Calcula score de produtividade 0-100"""
-        if not analytics:
-            return 50.0  # Neutro se não tiver dados
+    def _analizar_produtividade_diaria(self, dados: Dict) -> Optional[Insight]:
+        """
+        Analisa produtividade do dia e gera insight correspondente
+        """
+        if not dados:
+            return None
         
-        score = 50.0  # Base
+        pomodoros = dados.get('pomodoros', 0)
+        tarefas = dados.get('tarefas_concluidas', 0)
         
-        # Fatores positivos
-        tasks_done = analytics.get('total_tasks_completed', 0)
-        score += min(20, tasks_done * 0.5)  # Até +20 pontos
+        # Lógica simples de classificação
+        if pomodoros >= 8 and tarefas >= 5:
+            return Insight(
+                type=InsightType.ACHIEVEMENT,
+                title="🔥 Dia Altamente Produtivo!",
+                description=(
+                    f"Você completou {tarefas} tarefas e {pomodoros} pomodoros. "
+                    f"Isso está acima da sua média! Continue assim."
+                ),
+                confidence=InsightConfidence.HIGH,
+                data_points=[f"Pomodoros: {pomodoros}", f"Tarefas: {tarefas}"],
+                action_suggestions=[
+                    "Celebre essa conquista!",
+                    "Identifique o que funcionou bem hoje",
+                    "Tente replicar amanhã"
+                ],
+                category="productivity",
+                priority=9,
+                positive=True
+            )
         
-        pomodoros = analytics.get('total_pomodoros', 0)
-        score += min(15, pomodoros * 0.75)  # Até +15 pontos
+        elif pomodoros == 0 and tarefas == 0:
+            return Insight(
+                type=InsightType.WARNING,
+                title="⚠️ Sem Atividade Registrada Hoje",
+                description=(
+                    "Nenhuma tarefa ou pomodoro foi registrado hoje. "
+                    "Isso pode indicar dia de folha ou falta de tracking."
+                ),
+                confidence=InsightConfidence.MEDIUM,
+                data_points=["Pomodoros: 0", "Tarefas: 0"],
+                action_suggestions=[
+                    "Registrar pelo menos 1 tarefa completed",
+                    "Se foi dia de folha, registre como tal",
+                    "Verificar se precisa ajustar metas"
+                ],
+                category="productivity",
+                priority=7
+            )
         
-        streak = analytics.get('current_streak', 0)
-        score += min(10, streak * 2)  # Até +10 pontos
+        elif pomodoros > 0 and pomodoros < 4:
+            return Insight(
+                type=InsightType.SUGGESTION,
+                title="💪 Espaço para Mais Foco",
+                description=(
+                    f"Apenas {pomodoros} pomodoro(s) hoje. "
+                    f"Você tem capacidade para mais sessões de foco."
+                ),
+                confidence=InsightConfidence.MEDIUM,
+                data_points=[f"Pomodoros: {pomodoros}"],
+                action_suggestions=[
+                    "Adicionar mais 2-3 pomodoros",
+                    "Bloquear tempo no calendário",
+                    "Eliminar distrações conhecidas"
+                ],
+                category="productivity",
+                priority=5
+            )
         
-        # Fatores negativos
-        stalled = analytics.get('stalled_projects_count', 0)
-        score -= min(20, stalled * 5)  # Até -20 pontos
-        
-        inbox_avg = analytics.get('avg_inbox_size', 0)
-        if inbox_avg > 20:
-            score -= min(10, (inbox_avg - 20) * 0.5)  # Até -10 pontos
-        
-        return max(0, min(100, score))
+        return None  # Dia normal, sem insight especial
     
-    def _determine_productivity_trend(self, analytics: Dict) -> str:
-        """Determina se produtividade está melhorando/piorando/estável"""
-        if not analytics:
-            return "stable"
+    def _detectar_conquistas_diarias(self, dados: Dict) -> List[Insight]:
+        """
+        Detecta conquistas/marcos positivos do dia
+        """
+        conquistas = []
         
-        this_week = analytics.get('this_week_score', 50)
-        last_week = analytics.get('last_week_score', 50)
+        if not dados:
+            return conquistas
         
-        if this_week > last_week * 1.1:
-            return "improving"
-        elif this_week < last_week * 0.9:
-            return "declining"
+        streak = dados.get('streak_dias', 0)
+        
+        # Streak de dias
+        if streak >= 7:
+            conquistas.append(Insight(
+                type=InsightType.ACHIEVEMENT,
+                title=f"🏆 {streak} Dias de Sequência!",
+                description=(
+                    f"Você manteve uma sequência de {streak} dias consecutivos "
+                    f"de atividade. Isso demonstra consistência impressionante!"
+                ),
+                confidence=InsightConfidence.HIGH,
+                category="achievement",
+                priority=10,
+                positive=True
+            ))
+        
+        # Meta de tarefas
+        tarefas = dados.get('tarefas_concluidas', 0)
+        if tarefas >= 10:
+            conquistas.append(Insight(
+                type=InsightType.ACHIEVEMENT,
+                title="🎯 Meta de Tarefas Esmagada!",
+                description=f"{tarefas} tarefas concluídas hoje. Performance excepcional!",
+                confidence=InsightConfidence.HIGH,
+                category="achievement",
+                priority=9,
+                positive=True
+            ))
+        
+        return conquistas
+    
+    def _gerar_alertas_diarios(self, dados: Dict) -> List[Insight]:
+        """
+        Gera alertas preventivos baseados nos dados do dia
+        """
+        alertas = []
+        
+        if not dados:
+            return alertas
+        
+        inbox_size = dados.get('inbox_size', 0)
+        
+        # Inbox crescendo
+        if inbox_size >= 15:
+            alertas.append(Insight(
+                type=InsightType.WARNING,
+                title="📥 Inbox Precisa de Atenção",
+                description=(
+                    f"Inbox com {inbox_size} itens. "
+                    f"Risco de sobrecarga cognitiva aumentando."
+                ),
+                confidence=InsightConfidence.HIGH if inbox_size >= 25 else InsightConfidence.MEDIUM,
+                data_points=[f"Inbox size: {inbox_size}"],
+                action_suggestions=[
+                    "Reservar 25 min para processar inbox",
+                    "Aplicar regra 2-minutos: se leva <2min, faça agora"
+                ],
+                category="organization",
+                priority=8 if inbox_size >= 25 else 6
+            ))
+        
+        return alertas
+    
+    def _gerar_sugestao_contextual(self, dados: Dict) -> Optional[Insight]:
+        """
+        Gera sugestão personalizada baseada no contexto atual
+        """
+        if not dados:
+            return None
+        
+        hora_atual = datetime.now().hour
+        dia_semana = datetime.now().strftime('%A')
+        
+        # Sugestão baseada no horário
+        if 6 <= hora_atual <= 9:
+            return Insight(
+                type=InsightType.SUGGESTION,
+                title="🌅 Bom Dia! Hora de Planejar",
+                description=(
+                    "Início do dia é ideal para definir as 3 prioridades. "
+                    "O que VOCÊ vai accomplishing hoje?"
+                ),
+                confidence=InsightConfidence.HIGH,
+                category="planning",
+                priority=7,
+                action_suggestions=[
+                    "Definir TOP 3 prioridades do dia",
+                    "Revisar calendar compromissos",
+                    "Checar deadlines próximos"
+                ]
+            )
+        
+        elif 12 <= hora_atual <= 14:
+            return Insight(
+                type=InsightType.SUGGESTION,
+                title="🍽️ Pausa para Almoço?",
+                description=(
+                    "Horário de almoço. Boa oportunidade para descansar "
+                    "e recarregar energias para a tarde."
+                ),
+                confidence=InsightConfidence.MEDIUM,
+                category="wellbeing",
+                priority=4,
+                action_suggestions=[
+                    "Fazer pausa de verdade (longe da tela)",
+                    "Caminhar 10 minutos após comer",
+                    "Hidratar bem"
+                ]
+            )
+        
+        elif 20 <= hora_atual <= 23:
+            return Insight(
+                type=InsightType.SUGGESTION,
+                title="🌙 Preparando para Encerrar o Dia",
+                description=(
+                    "Final do dia se aproximando. Hora de fazer review "
+                    "rápido e preparar o terreno para amanhã."
+                ),
+                confidence=InsightConfidence.HIGH,
+                category="planning",
+                priority=6,
+                action_suggestions=[
+                    "Listar 3 coisas que foram bem hoje",
+                    "Identificar 1 coisa melhorar",
+                    "Preparar TOP 3 para amanhã"
+                ]
+            )
+        
+        return None
+    
+    def _detectar_padrao_recorrente(self) -> Optional[Insight]:
+        """
+        Detecta se há um padrão recorrente baseado em dados históricos
+        """
+        prod_diaria = self._historical_data.get('daily_productivity', [])
+        
+        if len(prod_diaria) < 3:
+            return None
+        
+        # Verificar se últimos 3 dias são consistentemente baixos
+        ultimos_3 = prod_diaria[-3:]
+        media_ultimos_3 = statistics.mean(ultimos_3) if ultimos_3 else 0
+        
+        if media_ultimos_3 < 3:  # Menos de 3 pomodoros média
+            return Insight(
+                type=InsightType.WARNING,
+                title="📉 Produtividade Baixa nos Últimos Dias",
+                description=(
+                    f"Média dos últimos 3 dias: {media_ultimos_3:.1f} pomodoros/dia. "
+                    f"Isso está abaixo do seu potencial."
+                ),
+                confidence=InsightConfidence.MEDIUM,
+                data_points=[f"Média 3 dias: {media_ultimos_3:.1f}"],
+                action_suggestions=[
+                    "Investigar causa (fadiga? bloqueio? desmotivação?)",
+                    "Reduzir escopo temporariamente",
+                    "Focar em 1 vitória rápida para recuperar momentum"
+                ],
+                category="pattern",
+                priority=8
+            )
+        
+        return None
+    
+    # ========================================
+    # MÉTODOS PRIVADOS - ANÁLISE DE PROJETOS
+    # ========================================
+    
+    def _analisar_saude_projeto_individual(self, projeto: Dict) -> Optional[ProjectHealthReport]:
+        """
+        Analisa saúde de um projeto individual
+        
+        Args:
+            projeto: Dicionário com dados do projeto do Lex Flow
+            
+        Returns:
+            ProjectHealthReport ou None se erro
+        """
+        relatorio = ProjectHealthReport(
+            project_id=projeto.get('id', ''),
+            project_name=projeto.get('name', 'Sem nome'),
+            last_activity=projeto.get('updated_at', projeto.get('last_activity'))
+        )
+        
+        try:
+            # Calcular dias desde última atividade
+            if relatorio.last_activity:
+                try:
+                    if isinstance(relatorio.last_activity, str):
+                        dt_atividade = datetime.fromisoformat(
+                            relatorio.last_activity.replace('Z', '+00:00')
+                        )
+                    elif isinstance(relatorio.last_activity, datetime):
+                        dt_atividade = relatorio.last_activity
+                    else:
+                        dt_atividade = None
+                    
+                    if dt_atividade:
+                        relatorio.days_since_activity = (
+                            datetime.now() - dt_atividade.replace(tzinfo=None)
+                        ).days
+                        
+                except Exception:
+                    pass
+            
+            # Determinar status de saúde baseado em múltiplos fatores
+            status_str = str(projeto.get('status', '')).lower()
+            dias_sem = relatorio.days_since_activity
+            
+            # Calcular score base (0-100)
+            score_base = 75.0  # Começa neutro
+            
+            # Ajustar por dias de inatividade
+            if dias_sem > self.DEFAULT_STALL_THRESHOLD_DAYS:
+                score_base -= min(dias_sem * 2, 40)  # -2 por dia, max -40
+            elif dias_sem <= 2:
+                score_base += 10  # Bônus por atividade recente
+            
+            # Ajustar por status explícito
+            if status_str == 'completed':
+                score_base = 95.0
+                relatorio.health_status = ProjectHealth.EXCELLENT
+            elif status_str == 'archived':
+                score_base = 100.0  # Arquivado é "bem resolvido"
+                relatorio.health_status = ProjectHealth.EXCELLENT
+            elif status_str == 'blocked':
+                score_base -= 20
+                relatorio.health_status = ProjectHealth.CRITICAL
+                relatorio.stalled_risk = "critical"
+            elif dias_sem > 14:
+                relatorio.health_status = ProjectHealth.STALLED
+                relatorio.stalled_risk = "critical"
+            elif dias_sem > 7:
+                relatorio.health_status = ProjectHealth.CRITICAL
+                relatorio.stalled_risk = "high"
+            elif dias_sem > 3:
+                relatorio.health_status = ProjectHealth.ATTENTION
+                relatorio.stalled_risk = "medium"
+            else:
+                relatorio.health_status = ProjectHealth.GOOD
+                relatorio.stalled_risk = "low"
+            
+            relatorio.health_score = max(0, min(100, score_base))
+            
+            # Gerar insights específicos deste projeto
+            if relatorio.health_score < 50:
+                relatorio.insights.append(Insight(
+                    type=InsightType.WARNING,
+                    title=f"⚠️ Projeto '{relatorio.project_name}' Precisa de Atenção",
+                    description=(
+                        f"Score de saúde: {relatorio.health_score:.1f}/100. "
+                        f"{dias_sem} dias sem atividade."
+                    ),
+                    confidence=InsightConfidence.HIGH,
+                    category="project_health",
+                    priority=8
+                ))
+                
+                relatorio.recommendations.extend([
+                    f"Abrir projeto '{relatorio.project_name}' no Lex Flow",
+                    "Definir próxima micro-ação (25 min)",
+                    "Agendar bloco de foco para esta semana"
+                ])
+            
+            elif relatorio.health_score >= 85:
+                relatorio.insights.append(Insight(
+                    type=InsightType.ACHIEVEMENT,
+                    title=f"✅ Projeto '{relatorio.project_name}' Saudável",
+                    description=f"Score de saúde excelente: {relatorio.health_score:.1f}/100",
+                    confidence=InsightConfidence.HIGH,
+                    category="project_health",
+                    priority=3,
+                    positive=True
+                ))
+            
+        except Exception as erro:
+            logger_insight.debug(f"   Erro analisando projeto {relatorio.project_id}: {erro}")
+            return None
+        
+        return relatorio
+    
+    # ========================================
+    # MÉTODOS PRIVADOS - ANÁLISE TELOS
+    # ========================================
+    
+    def _analisar_dimensao_time(self, dados: Dict) -> Dict[str, Any]:
+        """Analisa dimensão TIME do TELOS"""
+        dashboard = dados.get('dashboard', {})
+        pomodoros = dashboard.get('pomodoros', 0) if dashboard else 0
+        
+        # Lógica simplificada de avaliação
+        if pomodoros >= 8:
+            score = 90
+            avaliacao = "Excelente gestão do tempo esta semana!"
+        elif pomodoros >= 5:
+            score = 70
+            avaliacao = "Boa utilização do tempo, espaço para melhorar."
+        elif pomodoros >= 2:
+            score = 50
+            avaliacao = "Uso do tempo abaixo do potencial."
         else:
-            return "stable"
+            score = 30
+            avaliacao = "Pouca atividade registrada. Revisar prioridades."
+        
+        return {
+            'score': score,
+            'avaliacao': avaliacao,
+            'dados_chave': {'pomodoros_totais': pomodoros},
+            'sugestao': "Bloquear 2h de foco profundo por dia" if score < 70 else "Manter ritmo!"
+        }
     
-    def _identify_weekly_achievements(self, analytics: Dict) -> List[str]:
-        """Identifica conquistas da semana"""
-        achievements = []
-        
-        if not analytics:
-            return achievements
-        
-        # Metas de quantidade
-        if analytics.get('total_tasks_completed', 0) >= 25:
-            achievements.append("🏆 Semana de alta entrega: 25+ tarefas concluídas")
-        
-        if analytics.get('total_pomodoros', 0) >= 20:
-            achievements.append("🏆 Foco consistente: 20+ horas de deep work")
-        
-        if analytics.get('projects_advanced', 0) >= 3:
-            achievements.append("🚀 Múltiplos projetos avançaram esta semana")
-        
-        # Metas de consistência
-        if analytics.get('active_days', 0) >= 6:
-            achievements.append("📅 Semana quase perfeita: 6+ dias ativos")
-        
-        if analytics.get('inbox_zero_days', 0) >= 3:
-            achievements.append("🧹 Organização exemplar: 3+ dias com inbox zero")
-        
-        return achievements
+    def _analisar_dimensao_energy(self, dados: Dict) -> Dict[str, Any]:
+        """Analisa dimensão ENERGY do TELOS"""
+        # Simplificado - em produção usaria dados de wearable/self-report
+        return {
+            'score': 65,  # Default médio (sem dados específicos)
+            'avaliacao': "Nível de energia não mensurado diretamente.",
+            'dados_chave': {},
+            'sugestao': "Registrar nível de energia (1-10) ao final de cada dia"
+        }
     
-    def _generate_weekly_warnings(self, analytics: Dict) -> List[str]:
-        """Gera alertas da semana"""
-        warnings = []
+    def _analisar_dimensao_light(self, dados: Dict) -> Dict[str, Any]:
+        """Analisa dimensão LIGHT (clareza/aprendizado) do TELOS"""
+        licoes = dados.get('licoes_recentes', [])
         
-        if not analytics:
-            return warnings
+        if len(licoes) >= 3:
+            score = 80
+            avaliacao = f"Bom aprendizado esta semana: {len(licoes)} lições registradas."
+        elif len(licoes) >= 1:
+            score = 60
+            avaliacao = "Algumas lições aprendidas, mas espaço para mais reflexão."
+        else:
+            score = 40
+            avaliacao = "Poucas lições documentadas. Reflexão semanal recomendada."
         
-        # Projetos críticos
-        critical_projects = analytics.get('critical_projects', [])
-        for proj in critical_projects[:2]:
-            warnings.append(f"🚨 PROJETO CRÍTICO: {proj.get('name', '?')} precisa de atenção urgente")
-        
-        # Queda de produtividade
-        trend = self._determine_productivity_trend(analytics)
-        if trend == "declining":
-            warnings.append("📉 Tendência de queda na produtividade esta semana")
-        
-        # Acúmulo crônico
-        if analytics.get('avg_inbox_size', 0) > 30:
-            warnings.append("📥 Inbox cronicamente cheio. Considerar dia de limpeza.")
-        
-        # Streak quebrado
-        if analytics.get('streak_broken', False):
-            warnings.append("⛔ Sequência de dias ativos foi quebrada")
-        
-        return warnings
+        return {
+            'score': score,
+            'avaliacao': avaliacao,
+            'dados_chave': {'licoes_registradas': len(licoes)},
+            'sugestao': "Registrar 1 aprendizado por dia no Memory System"
+        }
     
-    def _generate_weekly_recommendations(self, summary: WeeklySummary) -> List[str]:
-        """Gera recomendações para próxima semana"""
-        recommendations = []
+    def _analisar_dimensao_opportunity(self, dados: Dict) -> Dict[str, Any]:
+        """Analisa dimensão OPPORTUNITY do TELOS"""
+        return {
+            'score': 55,
+            'avaliacao': "Oportunidades identificadas de forma limitada.",
+            'dados_chave': {},
+            'sugestao': "Reservar tempo semanal para brainstorm de oportunidades"
+        }
+    
+    def _analisar_dimensao_significance(self, dados: Dict) -> Dict[str, Any]:
+        """Analisa dimensão SIGNIFICANCE do TELOS"""
+        projetos = dados.get('projetos', [])
+        qtd_projetos = len(projetos) if isinstance(projetos, list) else 0
         
-        # Baseadas em tendência
-        if summary.trend == "declining":
-            recommendations.append("📈 Focar em recuperar ritmo: reduza escopo, aumente consistência")
-        elif summary.trend == "improving":
-            recommendations.append("🚀 Mantenha momentum: adicione 1 desafio extra na próxima semana")
+        if qtd_projetos >= 3:
+            score = 75
+            avaliacao = f"Trabalhando em {qtd_projetos} projetos com impacto potencial."
+        elif qtd_projetos >= 1:
+            score = 60
+            avaliacao = "Projetos em andamento, mas poderia ter mais significado."
+        else:
+            score = 40
+            avaliacao = "Poucos projetos ativos. Revisar objetivos de longo prazo."
         
-        # Baseadas em score
-        if summary.productivity_score < 50:
-            recommendations.append("🎯 Priorizar qualidade sobre quantidade: menos projetos, mais foco")
-        elif summary.productivity_score > 80:
-            recommendations.append("⭐ Considere expandir: você tem capacidade para mais")
+        return {
+            'score': score,
+            'avaliacao': avaliacao,
+            'dados_chave': {'projetos_ativos': qtd_projetos},
+            'sugestao': "Conectar tarefas diárias a objetivos maiores (WHY)"
+        }
+    
+    def _calcular_score_telos_geral(self, dimensoes: Dict) -> float:
+        """Calcula score geral TELOS (média das 5 dimensões)"""
+        if not dimensoes:
+            return 0.0
         
-        # Baseadas em padrões
-        for pattern in summary.patterns_found[:2]:
-            if pattern.actionable:
-                recommendations.append(f"💡 Aproveitar padrão: {pattern.description}")
+        scores = [d.get('score', 0) for d in dimensoes.values() if d]
+        return statistics.mean(scores) if scores else 0.0
+    
+    def _extrair_key_insight_telos(self, dimensoes: Dict) -> str:
+        """Extrai o insight principal da semana baseado nas dimensões"""
+        # Encontrar dimensão com menor score (área de melhoria)
+        pior_dimensao = None
+        pior_score = 100
         
-        # Recomendações genéricas úteis
-        if not recommendations:
-            recommendations.extend([
-                "📅 Revisar e ajustar metas semanais",
-                "🧘 Programar tempo de descanso e lazer",
-                "📚 Investir tempo em aprendizado novo"
+        for dimensao, dados in dimensoes.items():
+            score = dados.get('score', 0) if dados else 0
+            if score < pior_score:
+                pior_score = score
+                pior_dimensao = dimensao
+        
+        if pior_dimensao:
+            return (
+                f"Área de maior oportunidade de melhora: {pior_dimensao.value.upper()} "
+                f"(score: {pior_score:.0f}/100). Focar aqui na próxima semana trará "
+                f"os maiores ganhos."
+            )
+        
+        return "Sem dados suficientes para determinar insight principal."
+    
+    def _sugerir_foco_proxima_semana(self, dimensoes: Dict) -> str:
+        """Sugere foco principal para próxima semana"""
+        # Similar ao key insight, mas mais orientado a ação
+        pior_dimensao = min(
+            dimensoes.items(),
+            key=lambda x: x[1].get('score', 0) if x[1] else 0,
+            default=(None, {})
+        )
+        
+        if pior_dimensao[0]:
+            nome_dimensao = pior_dimensao[0].value.upper()
+            sugestao = pior_dimensao[1].get('sugestao', '')
+            return f"[{nome_dimensao}] {sugestao}"
+        
+        return "Manter consistência e foco nas prioridades estabelecidas."
+    
+    def _gerar_action_items_telos(self, resultado: TelosReviewResult) -> List[str]:
+        """Gera itens de ação concretos baseados no TELOS"""
+        actions = []
+        
+        for dimensao, dados in resultado.dimensions.items():
+            if dados and dados.get('score', 100) < 70:
+                sugestao = dados.get('sugestao', '')
+                if sugestao:
+                    actions.append(f"[{dimensao.value.capitalize()}] {sugestao}")
+        
+        # Adicionar ações genéricas se poucas específicas
+        if len(actions) < 3:
+            actions.extend([
+                "Revisar e atualizar lista de projetos ativos",
+                "Definir TOP 3 prioridades para segunda-feira",
+                "Agendar bloco de 2h de foco profundo (sem interrupções)"
             ])
         
-        return recommendations[:5]
-    
-    def _compile_top_weekly_insights(self, summary: WeeklySummary) -> List[Insight]:
-        """Compila os melhores insights da semana em objetos Insight"""
-        top_insights = []
-        
-        # De conquistas
-        for achievement in summary.achievements[:2]:
-            top_insights.append(Insight(
-                type=InsightType.ACHIEVEMENT,
-                title="Conquista Semanal",
-                description=achievement,
-                confidence=InsightConfidence.HIGH,
-                category="achievement"
-            ))
-        
-        # De warnings
-        for warning in summary.warnings[:2]:
-            top_insights.append(Insight(
-                type=InsightType.WARNING,
-                title="Alerta Semanal",
-                description=warning,
-                confidence=InsightConfidence.HIGH,
-                category="warning"
-            ))
-        
-        # De padrões
-        for pattern in summary.patterns_found[:1]:
-            top_insights.append(Insight(
-                type=InsightType.PATTERN,
-                title="Padrão Identificado",
-                description=pattern.description,
-                confidence=InsightConfidence.MEDIUM,
-                category="pattern",
-                action_suggestions=["Aproveitar este padrão"] if pattern.actionable else []
-            ))
-        
-        return top_insights
+        return actions[:7]  # Máximo 7 ações (uma por dia da semana)
     
     # ========================================
     # MÉTODOS PRIVADOS - DETECÇÃO DE PADRÕES
     # ========================================
     
-    def _analyze_productivity_by_weekday(self, data: Dict) -> Optional[Pattern]:
-        """Analisa quais dias da semana são mais produtivos"""
-        # Simulação - na implementação real usaria dados do Lex Flow
-        return Pattern(
-            name="Produtividade por Dia da Semana",
-            description="Terça e quarta são seus dias mais produtivos (baseado nos últimos 30 dias)",
-            frequency=4,  # Ocorreu nas últimas 4 semanas
-            examples=[
-                "Terça: 8 tarefas concluídas (média)",
-                "Quarta: 7 tarefas concluídas (média)"
-            ],
-            impact="high",
-            actionable=True
-        )
+    def _detectar_padrao_dia_semana(self, historico: List[Dict]) -> Optional[Pattern]:
+        """Detecta quais dias da semana são mais/menos produtivos"""
+        # Implementação simplificada - em produção faria análise estatística real
+        return None  # Placeholder para expansão futura
     
-    def _analyze_productivity_by_hour(self, data: Dict) -> Optional[Pattern]:
-        """Analisa quais horários são mais produtivos"""
-        return Pattern(
-            name="Horário de Pico Produtivo",
-            description="Seu melhor horário é entre 9h-11h (manhã)",
-            frequency=22,  # 22 dias úteis nos últimos 30 dias
-            examples=[
-                "Segunda 9h-11h: 5 tarefas",
-                "Quinta 9h-11h: 6 tarefas"
-            ],
-            impact="high",
-            actionable=True
-        )
+    def _detectar_padrao_horario(self, historico: List[Dict]) -> Optional[Pattern]:
+        """Detecta horários de pico de produtividade"""
+        return None  # Placeholder para expansão futura
     
-    def _detect_frequently_stalled_projects(self, data: Dict) -> Optional[Pattern]:
-        """Detecta projetos que frequentemente ficam parados"""
-        # Implementação real verificaria histórico de stalls
-        return None  # Retornar None se não houver padrão claro
+    def _detectar_padrao_tipos_tarefa(self, historico: List[Dict]) -> Optional[Pattern]:
+        """Detecta tipos de tarefa mais frequentes"""
+        return None  # Placeholder para expansão futura
     
-    def _analyze_common_task_types(self, data: Dict) -> Optional[Pattern]:
-        """Analisa tipos de tarefas mais comuns"""
-        return Pattern(
-            name="Tipo de Tarefa Predominante",
-            description="Você faz mais tarefas de 'Desenvolvimento' e 'Criação de Conteúdo'",
-            frequency=25,
-            examples=[
-                "Task: Implementar feature X",
-                "Task: Editar vídeo Y"
-            ],
-            impact="medium",
-            actionable=False
-        )
+    def _detectar_padrao_sequencia(self, historico: List[Dict]) -> Optional[Pattern]:
+        """Detecta sequências de atividades recorrentes"""
+        return None  # Placeholder para expansão futura
     
-    def _find_metric_correlations(self, data: Dict) -> List[Pattern]:
-        """Busca correlações entre métricas"""
-        correlations = []
-        
-        # Exemplo: correlação entre pomodoros e tarefas concluídas
-        correlations.append(Pattern(
-            name="Correlação: Pomodoros x Tarefas",
-            description="Dias com 4+ pomodoros têm 40% mais tarefas concluídas",
-            frequency=18,
-            impact="high",
-            actionable=True
-        ))
-        
-        return correlations
+    def _detectar_padroes_semanais(self, dados: Dict) -> List[Pattern]:
+        """Detecta padrões nos dados da semana"""
+        return []  # Placeholder - implementação futura com mais dados
     
     # ========================================
-    # UTILITÁRIOS
+    # MÉTODOS PRIVADOS - UTILITÁRIOS
     # ========================================
     
-    def _is_work_hour(self) -> bool:
-        """Verifica se agora é horário de trabalho típico"""
-        hour = datetime.now().hour
-        return 8 <= hour <= 18
+    def _adicionar_ao_cache(self, insight_id: str) -> None:
+        """Adiciona ID ao cache para evitar repetição"""
+        self._recent_insights_cache.append(insight_id)
+        
+        # Manter tamanho máximo do cache
+        if len(self._recent_insights_cache) > self._max_cache_size:
+            self._recent_insights_cache = \
+                self._recent_insights_cache[-self._max_cache_size:]
     
-    def _extract_active_projects_from_activity(self, activity: List[Dict]) -> List[str]:
-        """Extrai nomes de projetos da atividade recente"""
-        projects = set()
-        for item in activity[:10]:  # Últimos 10 itens
-            project = item.get('project_title', item.get('project', ''))
-            if project:
-                projects.add(project)
-        return list(projects)
+    def _armazenar_historico(self, dados: Dict) -> None:
+        """Armazena dados no histórico para análises de tendência"""
+        if dados:
+            self._historical_data['daily_stats'].append({
+                'data': datetime.now().isoformat(),
+                'dados': dados
+            })
+            
+            # Extrair métrica chave para análise de produtividade
+            pomodoros = dados.get('pomodoros', 0)
+            self._historical_data['daily_productivity'].append(pomodoros)
+            
+            # Manter histórico limitado (últimos 90 dias)
+            max_dias = 90
+            if len(self._historical_data['daily_stats']) > max_dias:
+                self._historical_data['daily_stats'] = \
+                    self._historical_data['daily_stats'][-max_dias:]
+                self._historical_data['daily_productivity'] = \
+                    self._historical_data['daily_productivity'][-max_dias:]
     
-    def _generate_project_recommendations(self, health: Dict) -> List[str]:
-        """Gera recomendações baseadas na saúde do projeto"""
-        recommendations = []
+    def _salvar_resumo_memoria(self, resumo: WeeklySummary) -> None:
+        """Salva resumo semanal no Memory System (persistência)"""
+        if not self._memory:
+            return
         
-        score = health.get('health_score', 50)
-        status = health.get('health_status', 'unknown')
+        try:
+            texto_resumo = (
+                f"# RESUMO SEMANAL ({resumo.week_start} a {resumo.week_end})\n\n"
+                f"## Score de Produtividade\n{resumo.productivity_score:.1f}/100\n\n"
+                f"## Tendência\n{resumo.trend}\n\n"
+                f"## Principais Insights\n"
+            )
+            
+            for insight in resumo.top_insights[:3]:
+                texto_resumo += f"- **{insight.title}**: {insight.description[:150]}...\n"
+            
+            if resumo.recommendations:
+                texto_resumo += "\n## Recomendações\n"
+                for rec in resumo.recommendations[:5]:
+                    texto_resumo += f"- {rec}\n"
+            
+            # Salvar como lição aprendida
+            self._memory.add_lesson(
+                texto_licao=texto_resumo,
+                categoria="weekly-review",
+                origem="insight_generator",
+                tags=["semanal", "review", "telos"],
+                impact="alto"
+            )
+            
+            logger_insight.debug("   Resumo salvo no MEMORY.md")
+            
+        except Exception as erro:
+            logger_insight.debug(f"Erro salvando resumo na memória: {erro}")
+    
+    def _calcular_score_produtividade_semanal(self, dados: Dict) -> float:
+        """Calcula score de produtividade semanal (0-100)"""
+        total_pomodoros = dados.get('total_pomodoros', 0)
+        total_tarefas = dados.get('total_tarefas', 0)
+        dias = dados.get('dias_analisados', 7)
         
-        if status == 'stalled':
-            recommendations.append("Retomar o projeto com uma micro-tarefa de 25 min hoje")
-            recommendations.append("Revisar se o projeto ainda é prioridade ou deve ser arquivado")
-        elif status == 'critical':
-            recommendations.append("Dedicar bloco de tempo focado neste projeto nas próximas 48h")
-            recommendations.append("Identificar bloqueios e pedir ajuda se necessário")
-        elif status == 'attention':
-            recommendations.append("Agendar sessão de trabalho neste projeto nos próximos 3 dias")
-        elif score >= 80:
-            recommendations.append("Excelente momentum! Considerar entregar próximo marco")
+        if dias == 0:
+            return 50.0  # Neutro sem dados
         
-        # Recomendação genérica útil
-        if not recommendations:
-            recommendations.append("Manter ritmo atual de atividade no projeto")
+        # Score baseado em médias diárias
+        media_pomodoros = total_pomodoros / max(dias, 1)
+        media_tarefas = total_tarefas / max(dias, 1)
         
-        return recommendations[:3]
+        # Normalizar para 0-100 (escalas arbitrárias ajustáveis)
+        score_pomodoros = min(media_pomodoros * 10, 50)  # Max 50 pontos
+        score_tarefas = min(media_tarefas * 5, 40)       # Max 40 pontos
+        score_bonus = 10 if total_pomodoros > 0 else 0     # Bônus por atividade
+        
+        return min(score_pomodoros + score_tarefas + score_bonus, 100)
+    
+    def _gerar_top_insights_semanais(self, dados: Dict) -> List[Insight]:
+        """Gera os principais insights da semana"""
+        insights = []
+        
+        # Insight de produtividade
+        score = self._calcular_score_produtividade_semanal(dados)
+        
+        if score >= 80:
+            insights.append(Insight(
+                type=InsightType.ACHIEVEMENT,
+                title="🏆 Semana Produtiva!",
+                description=f"Score de produtividade: {score:.1f}/100. Excelente desempenho!",
+                confidence=InsightConfidence.HIGH,
+                category="productivity",
+                priority=10,
+                positive=True
+            ))
+        elif score < 40:
+            insights.append(Insight(
+                type=InsightType.WARNING,
+                title="📉 Semana de Baixa Produtividade",
+                description=f"Score: {score:.1f}/100. Oportunidade de melhoria.",
+                confidence=InsightConfidence.HIGH,
+                category="productivity",
+                priority=9
+            ))
+        
+        return insights
+    
+    def _identificar_conquistas_semanais(self, dados: Dict) -> List[str]:
+        """Identifica conquistas da semana"""
+        conquistas = []
+        
+        total_tarefas = dados.get('total_tarefas', 0)
+        if total_tarefas >= 20:
+            conquistas.append(f"🎯 {total_tarefas} tarefas concluídas!")
+        
+        total_pomodoros = dados.get('total_pomodoros', 0)
+        if total_pomodoros >= 30:
+            conquistas.append(f"🍅 {total_pomodoros} pomodoros completos!")
+        
+        return conquistas
+    
+    def _gerar_warnings_semanais(self, dados: Dict) -> List[str]:
+        """Gera warnings para a semana"""
+        warnings = []
+        
+        total_tarefas = dados.get('total_tarefas', 0)
+        if total_tarefas < 5:
+            warnings.append("⚠️ Poucas tarefas concluídas esta semana")
+        
+        return warnings
+    
+    def _gerar_recomendacoes_semanais(
+        self,
+        score: float,
+        padroes: List[Pattern],
+        warnings: List[str]
+    ) -> List[str]:
+        """Gera recomendações estratégicas para próxima semana"""
+        recomendacoes = []
+        
+        # Baseado no score
+        if score < 50:
+            recomendacoes.append(
+                "FOCO: Reduzir número de projetos ativos, concentrar em 2-3 máximos"
+            )
+            recomendacoes.append(
+                "AÇÃO: Definir 3 prioridades não-negociáveis para cada dia"
+            )
+        elif score < 75:
+            recomendacoes.append(
+                "MELHORIA: Adicionar 1 bloco de foco profundo (2h) por dia"
+            )
+        
+        # Baseado em warnings
+        for warning in warnings:
+            if "Poucas tarefas" in warning:
+                recomendacoes.append(
+                    "Meta: Mínimo 5 tarefas concluídas por dia (começar pequeno)"
+                )
+        
+        # Recomendações genéricas úteis
+        recomendacoes.extend([
+            "Revisar e arquivar projetos parados há > 14 dias",
+            "Processar inbox até zero antes de segunda-feira",
+            "Agendar revisão TELOS para próximo domingo à noite"
+        ])
+        
+        return recomendacoes
+    
+    def _determinar_tendencia_semanal(self, dados: Dict) -> str:
+        """Determina tendência da semana (improving/stable/declining)"""
+        # Simplificado - em produção compararia com semana anterior
+        score = dados.get('productivity_score', 50) if 'productivity_score' in dados else \
+                 self._calcular_score_produtividade_semanal(dados)
+        
+        if score >= 75:
+            return "improving"
+        elif score >= 50:
+            return "stable"
+        else:
+            return "declining"
+    
+    # ========================================
+    # UTILITÁRIOS PÚBLICOS
+    # ========================================
+    
+    def get_status(self) -> Dict[str, Any]:
+        """
+        Retorna status completo do Insight Generator
+        
+        Útil para health checks e diagnósticos.
+        
+        Returns:
+            Dicionário com status detalhado
+        """
+        # Status do Lex Flow
+        lex_flow_status = 'not_configured'
+        if self._lex_flow:
+            try:
+                if hasattr(self._lex_flow, 'is_authenticated'):
+                    lex_flow_status = 'connected' if self._lex_flow.is_authenticated() else 'error'
+                else:
+                    lex_flow_status = 'configured'
+            except Exception:
+                lex_flow_status = 'error'
+        
+        return {
+            'version': '2.0.0',
+            'lex_flow': lex_flow_status,
+            'memory': 'available' if self._memory else 'not_configured',
+            'decision_engine': 'available' if self._decision else 'not_configured',
+            'cache_size': len(self._recent_insights_cache),
+            'historical_data_points': sum(
+                len(v) for v in self._historical_data.values()
+            ),
+            'statistics': self._stats.copy(),
+            'timestamp': datetime.now().isoformat()
+        }
+    
+    def get_estatisticas(self) -> Dict[str, int]:
+        """
+        Retorna estatísticas de uso do gerador
+        
+        Returns:
+            Dicionário com contadores de operações
+        """
+        return self._stats.copy()
 
+
+# ============================================
+# BLOCO DE TESTE STANDALONE
+# ============================================
 
 if __name__ == "__main__":
-    # Teste rápido
-    print("💡 Testando Insight Generator...")
+    """
+    Modo de teste standalone - executa validações básicas
+    sem precisar do Core Engine completo.
     
-    # Nota: Precisaria de instâncias reais de MemorySystem e LexFlowClient
-    print("✅ Módulo carregado com sucesso!")
-    print("   Para testar completo, use via SecondBrainEngine")
+    Para executar:
+        python engine/insight_generator.py
+    """
+    print("\n" + "=" * 70)
+    print("💡 INSIGHT GENERATOR v2.0 - TESTE STANDALONE")
+    print("=" * 70 + "\n")
+    
+    # Teste 1: Importação e Classes Básicas
+    print("📋 Teste 1: Importação e Classes...")
+    try:
+        assert InsightType.PATTERN.value == "pattern"
+        assert InsightConfidence.HIGH.value == "high"
+        assert ProjectHealth.GOOD.value == "good"
+        assert TelosDimension.TIME.value == "time"
+        print("   ✅ Todos os Enums importados corretamente\n")
+    except Exception as erro:
+        print(f"   ❌ ERRO: {erro}\n")
+    
+    # Teste 2: Data Classes
+    print("📋 Teste 2: Data Classes (Insight, Pattern, etc.)...")
+    try:
+        # Testar Insight
+        insight_teste = Insight(
+            type=InsightType.ACHIEVEMENT,
+            title="Teste de Insight",
+            description="Descrição teste",
+            confidence=InsightConfidence.HIGH
+        )
+        dict_insight = insight_teste.to_dict()
+        assert dict_insight['type'] == 'achievement'
+        assert dict_insight['confidence'] == 'high'
+        assert 'id' in dict_insight  # Deve ser gerado auto
+        print(f"   ✅ Insight criado: ID={dict_insight['id'][:15]}...")
+        
+        # Testar Pattern
+        padrao_teste = Pattern(
+            name="Padrão Teste",
+            description="Descrição do padrão",
+            frequency=5,
+            positive=True
+        )
+        dict_padrao = padrao_teste.to_dict()
+        assert dict_padrao['frequency'] == 5
+        print(f"   ✅ Pattern criado: {dict_padrao['name']}")
+        
+        # Testar ProjectHealthReport
+        relatorio_teste = ProjectHealthReport(
+            project_name="Projeto Teste",
+            health_score=85.5
+        )
+        dict_relatorio = relatorio_teste.to_dict()
+        assert dict_relatorio['health_score'] == 85.5
+        print(f"   ✅ ProjectHealthReport criado: score={dict_relatorio['health_score']}\n")
+        
+    except Exception as erro:
+        print(f"   ❌ ERRO: {erro}\n")
+    
+    # Teste 3: Inicialização sem Lex Flow (modo degradado)
+    print("📋 Teste 3: Inicialização modo degradado (sem Lex Flow)...")
+    try:
+        generator_degradado = InsightGenerator(lex_flow_client=None)
+        status = generator_degradado.get_status()
+        print(f"   ✅ Inicializado (Lex Flow: {status['lex_flow']})\n")
+    except Exception as erro:
+        print(f"   ❌ ERRO: {erro}\n")
+    
+    # Teste 4: COM Lex Flow (teste completo!)
+    print("📋 Teste 4: Inicialização COM Lex Flow + Insights Diários...")
+    try:
+        from integrations.lex_flow_definitivo import LexFlowClient
+        lex_flow = LexFlowClient()
+        
+        generator_completo = InsightGenerator(
+            lex_flow_client=lex_flow,
+            memory_system=None  # Opcional para este teste
+        )
+        
+        # Gerar insights diários
+        insights_diarios = generator_completo.generate_daily_insights()
+        
+        print(f"   ✅ Insight Generator inicializado com Lex Flow")
+        print(f"   Insights diários gerados: {len(insights_diarios)}")
+        
+        for i, insight in enumerate(insights_diarios[:5], 1):
+            print(f"      [{i}] {insight.type.value:12} | {insight.title[:50]}")
+            print(f"          Confiança: {insight.confidence.value} | Priority: {insight.priority}")
+        
+        print()
+        
+    except ImportError:
+        print("   ⚠️ LexFlowClient não disponível (modo local-only)\n")
+    except Exception as erro:
+        print(f"   ⚠️ Erro (pode ser normal): {erro}\n")
+    
+    # Teste 5: Análise de Projetos
+    print("📋 Teste 5: Análise de Saúde de Projetos...")
+    try:
+        if 'generator_completo' in dir() and generator_completo._lex_flow:
+            relatorios_projetos = generator_completo.analyze_all_projects_health()
+            
+            print(f"   ✅ {len(relatorios_projetos)} projetos analisados:")
+            
+            for rel in relatorios_projetos[:3]:
+                emoji_saude = {
+                    'excellent': '💚', 'good': '💙', 
+                    'attention': '💛', 'critical': '🧡', 'stalled': '❤️'
+                }.get(rel.health_status.value, '⚪')
+                
+                print(f"      {emoji_saude} {rel.project_name[:35]:<35} "
+                      f"| Score: {rel.health_score:>5.1f} | Risco: {rel.stalled_risk}")
+            
+            print()
+            
+        else:
+            print("   ⏭️ Pulado (sem Lex Flow conectado)\n")
+            
+    except Exception as erro:
+        print(f"   ⚠️ Erro: {erro}\n")
+    
+    # Teste 6: Resumo Semanal
+    print("📋 Teste 6: Geração de Resumo Semanal...")
+    try:
+        if 'generator_completo' in dir():
+            resumo_semanal = generator_completo.generate_weekly_summary()
+            
+            print(f"   ✅ Resumo semanal gerado:")
+            print(f"      Período: {resumo_semanal.week_start} a {resumo_semanal.week_end}")
+            print(f"      Score Produtividade: {resumo_semanal.productivity_score:.1f}/100")
+            print(f"      Total Insights: {resumo_semanal.total_insights}")
+            print(f"      Tendência: {resumo_semanal.trend}")
+            print(f"      Padrões: {len(resumo_semanal.patterns_found)}")
+            print(f"      Recomendações: {len(resumo_semanal.recommendations)}")
+            print()
+            
+    except Exception as erro:
+        print(f"   ⚠️ Erro: {erro}\n")
+    
+    # Teste 7: Relatório TELOS
+    print("📋 Teste 7: Relatório TELOS (Weekly Review)...")
+    try:
+        if 'generator_completo' in dir():
+            telos = generator_completo.generate_telos_review()
+            
+            print(f"   ✅ Relatório TELOS gerado:")
+            print(f"      Score Geral: {telos.overall_score:.1f}/100")
+            print(f"      Key Insight: {telos.key_insight[:70]}...")
+            print(f"      Foco Próxima Semana: {telos.next_week_focus[:60]}...")
+            print(f"      Action Items: {len(telos.action_items)}")
+            
+            # Mostrar dimensões
+            print(f"\n      Dimensões TELOS:")
+            for dim, dados in telos.dimensions.items():
+                if dados:
+                    score = dados.get('score', 0)
+                    aval = dados.get('avaliacao', '')[:50]
+                    print(f"         {dim.value:12} | Score: {score:>5.1f} | {aval}")
+            
+            print()
+            
+    except Exception as erro:
+        print(f"   ⚠️ Erro: {erro}\n")
+    
+    # Teste 8: Status Final
+    print("📋 Teste 8: Status do Sistema...")
+    try:
+        if 'generator_completo' in dir():
+            status_final = generator_completo.get_status()
+            stats = generator_completo.get_estatisticas()
+            
+            print(f"   Versão: {status_final['version']}")
+            print(f"   Lex Flow: {status_final['lex_flow']}")
+            print(f"   Cache: {status_final['cache_size']} itens")
+            print(f"   Dados Históricos: {status_final['historical_data_points']} pontos")
+            print(f"   Estatísticas: {stats}\n")
+            
+    except Exception as erro:
+        print(f"   ❌ ERRO: {erro}\n")
+    
+    print("=" * 70)
+    print("🎯 TESTES CONCLUÍDOS - Verifique os logs em logs/insight_generator.log")
+    print("=" * 70 + "\n")
