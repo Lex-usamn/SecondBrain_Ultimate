@@ -108,6 +108,7 @@ from engine.config_loader import get_config, get_settings, ConfigLoader, SystemC
 
 # Cliente Lex Flow (integração principal com a aplicação web)
 from integrations.lex_flow_definitivo import LexFlowClient, LexFlowConfig
+from engine.scheduler import SchedulerSystem
 
 # ============================================
 # CONFIGURAÇÃO DE LOGGING ESPECÍFICA DO MOTOR
@@ -312,6 +313,11 @@ class CoreEngine:
         self._sistema_memoria = None             # MemorySystem (RAG + histórico)
         self._sistema_automacao = None           # AutomationSystem (tarefas auto)
         self._gerador_insights = None            # InsightGenerator (análise padrões)
+
+        # === NESTA SEÇÃO ESPECÍFICA ===
+        self._sistema_automacao = None           # AutomationSystem (tarefas auto)
+        self._gerador_insights = None            # InsightGenerator (análise padrões)
+        self._scheduler = None                   # SchedulerSystem (automações agendadas)  # ← ADICIONAR ESTA LINHA!
         
         # ESTADO OPERACIONAL DO MOTOR
         # ----------------------------
@@ -330,6 +336,7 @@ class CoreEngine:
         # Marcar como inicializado (para o Singleton não rodar de novo)
         self._ja_foi_inicializado = True
         
+        
         # Log informativo de inicialização
         logger_core.info("=" * 80)
         logger_core.info("🧠 CORE ENGINE v2.0 CRIADO (Singleton Instance)")
@@ -338,6 +345,37 @@ class CoreEngine:
         logger_core.info(f"   Usuário: {self.configuracoes.user_name}")
         logger_core.info(f"   Timezone: {self.configuracoes.timezone}")
         logger_core.info("=" * 80)
+        
+    # ============================================================
+    # SCHEDULER SYSTEM (Automações Agendadas)
+    # ============================================================
+    @property
+    def scheduler(self) -> Optional[SchedulerSystem]:
+        """
+        Retorna instância do SchedulerSystem (Lazy Loading).
+        
+        O Scheduler é responsável por:
+        - Morning Briefing automático (06:00 via Telegram)
+        - Midday Check-in (12:00)
+        - Evening Reflection (20:00 via Telegram)
+        - TELOS Review semanal (Domingo 20:00)
+        - Heartbeat contínuo (cada 30 minutos)
+        
+        Só é instanciado quando acessado pela primeira vez.
+        
+        Returns:
+            SchedulerSystem: Instância do sistema de agendamentos
+        """
+        if self._scheduler is None:
+            try:
+                self._scheduler = SchedulerSystem.get_instance(engine=self)
+                logger_core.info("✅ SchedulerSystem carregado (lazy loading)")
+            except Exception as e:
+                logger_core.error(f"❌ Erro ao carregar SchedulerSystem: {e}")
+        
+        return self._scheduler
+
+
     
     # ==========================================
     # MÉTODOOS ESTÁTICOS DE ACESSO SINGLETON

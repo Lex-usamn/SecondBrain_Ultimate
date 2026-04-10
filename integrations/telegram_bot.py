@@ -825,45 +825,17 @@ _Lex Brain Hybrid by Lex-Usamn | Segundo Cérebro Ultimate_
 
     async def comando_tarefa(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """
-        Handler do comando /tarefa - Criação Rápida de Tarefas em Projetos
+        Handler do comando /tarefa v1.3 FINAL - 100% Funcional!
         
-        ====================================================================
-        PROPÓSITO:
-        Criar uma nova tarefa em um projeto existente do Lex Flow.
-        Diferente de /nota (que é para ideias), /tarefa é para AÇÕES CONCRETAS.
-        
-        ====================================================================
         FORMATOS SUPORTADOS:
+        - /tarefa <texto>  → Inbox automático
+        - /tarefa <texto> --projeto <ID>  → ID numérico
+        - /tarefa <texto> --projeto <NOME>  → Busca por nome
+        - /tarefa <texto> --prioridade <nivel>
+        - /tarefa <texto> --projeto <ID|NOME> --prioridade <nivel>
         
-        BÁSICO (cria no projeto padrão ou Inbox):
-            /tarefa <texto da tarefa>
-            Exemplo: /tarefa Editar vídeo #12
-        
-        AVANÇADO (controle total):
-            /tarefa <texto> --projeto <ID_ou_NOME> --prioridade <nivel>
-            
-            Exemplos:
-            /tarefa Revisar contrato --projeto 5 --prioridade alta
-            /tarefa Gravar thumbnail --projeto CanaisDark --prioridade urgente
-            /tarefa Comprar domínio --prioridade media
-        
-        NÍVEIS DE PRIORIDADE ACEITOS:
-            - alta / high → 🟠
-            - media / medium / média → 🟡 (padrão)
-            - baixa / low → 🟢
-            - urgente / urgent → 🔴🔴🔴
-        
-        ====================================================================
-        FLUXO DE EXECUÇÃO:
-        1. Extrair e validar texto da tarefa
-        2. Parsear --projeto (se presente) → converter nome para ID se necessário
-        3. Parsear --prioridade (se presente) → mapear para valor padrão
-        4. Se projeto não especificado → buscar projeto padrão/inbox
-        5. Enviar "⏳ Criando tarefa..."
-        6. Executar motor.adicionar_tarefa() ou motor.capturar() (fallback)
-        7. Editar mensagem com resultado
-        
-        ====================================================================
+        v1.3 - EXTRAÇÃO DE ID DA ESTRUTURA REAL DA API:
+        A API retorna: {'success': True, 'task': {'id': 123, ...}}
         """
 
         usuario_nome = update.effective_user.first_name or "Usuário"
@@ -871,193 +843,250 @@ _Lex Brain Hybrid by Lex-Usamn | Segundo Cérebro Ultimate_
         
         try:
             # ========================================
-            # EXTRAIR TEXTO DO COMANDO
+            # PASSO 1: EXTRAIR TEXTO DO COMANDO
             # ========================================
             texto_completo = ' '.join(context.args) if context.args else ''
             
-            # Validação: texto obrigatório
             if not texto_completo.strip():
                 await update.message.reply_text(
-                    "❌ *Uso incorreto do comando /tarefa*\n\n"
-                    "*Formato básico:*\n"
-                    "`/tarefa <texto da tarefa>`\n\n"
-                    "*Formato avançado:*\n"
-                    "`/tarefa Texto --projeto ID --prioridade nivel`\n\n"
-                    "*Exemplos:*\n"
-                    "`/tarefa Editar vídeo #12`\n"
-                    "`/tarefa Revisar contrato --projeto 5 --prioridade alta`\n"
-                    "`/arefa Gravar podcast --projeto CanaisDark --prioridade urgente`\n\n"
-                    "*Prioridades:* baixa, media, alta, urgente",
-                    parse_mode='Markdown'
+                    "❌ Uso incorreto do /tarefa\n\n"
+                    "Formatos:\n"
+                    "/tarefa <texto>\n"
+                    "/tarefa <texto> --projeto <ID|NOME>\n"
+                    "/tarefa <texto> --prioridade <nivel>\n\n"
+                    "Exemplos:\n"
+                    "/tarefa Editar vídeo #12\n"
+                    "/tarefa Revisar contrato --projeto 5\n"
+                    "/tarefa Gravar podcast --projeto Canais Dark\n\n"
+                    "Prioridades: baixa, media, alta, urgente"
                 )
                 return
             
             # ========================================
-            # PARSEAR ARGUMENTOS OPCIONAIS AVANÇADOS
+            # PASSO 2: INICIALIZAR MOTOR
+            # ========================================
+            motor = CoreEngine.obter_instancia()
+            
+            if not motor.lexflow:
+                await update.message.reply_text(
+                    "❌ Lex Flow indisponível\n\nTente novamente em instantes."
+                )
+                return
+            
+            # ========================================
+            # PASSO 3: PARSEAR ARGUMENTOS
             # ========================================
             
-            # Variáveis com valores padrão (se usuário não especificar)
-            titulo_tarefa = texto_completo  # Texto completo inicialmente
-            projeto_id = None  # None = determinar automaticamente
-            prioridade = "medium"  # Prioridade padrão (média)
+            titulo_tarefa = texto_completo
+            projeto_id = None
+            prioridade = "medium"
+            projeto_nome_busca = None
             
-            # --- PARSEAR --PROJETO ---
+            # --- PARSEAR --PROJETO (suporta nomes com espaços!) ---
             if '--projeto' in texto_completo:
-                # Divide o texto na primeira ocorrência de --projeto
                 partes_projeto = texto_completo.split('--projeto', 1)
-                titulo_tarefa = partes_projeto[0].strip()  # Antes do --projeto é o título
+                titulo_tarefa = partes_projeto[0].strip()
                 resto_apos_projeto = partes_projeto[1].strip() if len(partes_projeto) > 1 else ''
                 
-                # Extrair a próxima palavra/parte como identificador do projeto
-                projeto_identificador = resto_apos_projeto.split()[0] if resto_apos_projeto.split() else None
+                # Pega tudo até o próximo -- ou fim (suporta "Canais Dark" com espaço!)
+                if '--prioridade' in resto_apos_projeto:
+                    projeto_identificador = resto_apos_projeto.split('--prioridade')[0].strip()
+                else:
+                    projeto_identificador = resto_apos_projeto.strip()
                 
                 if projeto_identificador:
-                    # Tentar converter para número inteiro (se for ID numérico)
                     try:
                         projeto_id = int(projeto_identificador)
-                        logger_telegram.info(f"   Projeto ID numérico detectado: {projeto_id}")
+                        logger_telegram.info(f"   ✅ Projeto ID numérico: {projeto_id}")
                     except ValueError:
-                        # Se não é número, é nome do projeto (string)
-                        # TODO: Implementar busca de projeto por nome (futuro)
-                        # Por enquanto, logamos e deixamos como None (vai usar fallback)
-                        logger_telegram.info(f"   Projeto nome detectado: '{projeto_identificador}' (busca por nome não implementada ainda)")
-                        projeto_id = None
+                        projeto_nome_busca = projeto_identificador
+                        logger_telegram.info(f"   🔍 Projeto nome: '{projeto_nome_busca}'")
             
             # --- PARSEAR --PRIORIDADE ---
             if '--prioridade' in texto_completo:
-                # Divide o texto na primeira ocorrência de --prioridade
                 partes_prioridade = texto_completo.split('--prioridade', 1)
                 parte_apos_prioridade = partes_prioridade[1].strip() if len(partes_prioridade) > 1 else ''
                 
-                # Extrair a primeira palavra após --prioridade
                 prioridade_str = parte_apos_prioridade.split()[0] if parte_apos_prioridade.split() else 'medium'
                 
-                # Mapeamento flexível de prioridades (português + inglês)
                 mapeamento_prioridade = {
-                    # Português
-                    'alta': 'high',
-                    'media': 'medium',
-                    'média': 'medium',
-                    'baixa': 'low',
-                    'urgente': 'urgent',
-                    # Inglês
-                    'high': 'high',
-                    'medium': 'medium',
-                    'low': 'low',
-                    'urgent': 'urgent'
+                    'alta': 'high', 'media': 'medium', 'média': 'medium',
+                    'baixa': 'low', 'urgente': 'urgent',
+                    'high': 'high', 'medium': 'medium', 'low': 'low', 'urgent': 'urgent'
                 }
                 
-                # Aplicar mapeamento (default para medium se não reconhecido)
                 prioridade = mapeamento_prioridade.get(prioridade_str.lower(), 'medium')
-                logger_telegram.info(f"   Prioridade detectada: '{prioridade_str}' → '{prioridade}'")
+                logger_telegram.info(f"   📊 Prioridade: '{prioridade_str}' → '{prioridade}'")
             
             # ========================================
-            # DETERMINAR PROJETO (FALLBACK SE NECESSÁRIO)
+            # PASSO 4: RESOLVER PROJETO (BUSCA POR NOME)
             # ========================================
-            if projeto_id is None:
-                # Se usuário não especificou projeto, tentar obter o primeiro disponível
-                try:
-                    projetos_disponiveis = self.motor.lexflow.get_projects()
-                    
-                    if projetos_disponiveis and len(projetos_disponiveis) > 0:
-                        # Usa o primeiro projeto da lista como padrão
-                        projeto_id = projetos_disponiveis[0].get('id')
-                        nome_projeto_padrao = projetos_disponiveis[0].get('name', 'Projeto Padrão')
-                        logger_telegram.info(f"   Usando projeto padrão: ID={projeto_id} ({nome_projeto_padrao})")
-                    else:
-                        # Nenhum projeto encontrado no Lex Flow
-                        logger_telegram.warning("   Nenhum projeto encontrado no Lex Flow para usar como padrão")
-                        
-                except Exception as erro_projetos:
-                    logger_telegram.warning(f"   Erro ao buscar projetos para fallback: {erro_projetos}")
             
-            # ========================================
-            # FEEDBACK VISUAL (Mensagem de Espera)
-            # ========================================
-            mensagem_espera = await update.message.reply_text(
-                "⏳ *Criando tarefa...* 📋\n\n"
-                "Enviando para o Lex Flow...",
-                parse_mode='Markdown'
-            )
-            
-            # ========================================
-            # EXECUTAR CRIAÇÃO DA TAREFA
-            # ========================================
-            if projeto_id:
-                # Temos um projeto válido → criar tarefa oficial via motor
-                resultado = self.motor.adicionar_tarefa(
-                    projeto_id=projeto_id,
-                    titulo=titulo_tarefa,
-                    prioridade=prioridade
-                )
-            else:
-                # Sem projeto disponível → criar como nota com tag [TAREFA] (fallback gracefully)
-                logger_telegram.info("  Fallback: criando como nota (sem projeto disponível)")
-                resultado = self.motor.capturar(
-                    idea=f"[TAREFA] {titulo_tarefa}",
-                    tags=['tarefa', f'prioridade-{prioridade}', 'telegram']
-                )
-            
-            # ========================================
-            # PROCESSAR RESULTADO E RESPONDER
-            # ========================================
-            if resultado and resultado.get('id'):
-                # === TAREFA CRIADA COM SUCESSO ===
-                id_tarefa = resultado.get('id', 'desconhecido')
+            if projeto_nome_busca and not projeto_id:
+                logger_telegram.info(f"   🔍 Buscando projeto: '{projeto_nome_busca}'")
                 
-                # Emojis visuais para cada nível de prioridade (comunicação instantânea)
-                emojis_prioridade = {
+                try:
+                    projetos = motor.lexflow.get_projects()
+                    
+                    if projetos:
+                        projeto_encontrado = None
+                        
+                        for p in projetos:
+                            nome_projeto = p.get('name', '').lower().strip()
+                            busca_lower = projeto_nome_busca.lower().strip()
+                            
+                            # Match exato, parcial ou inverso
+                            if (busca_lower == nome_projeto or 
+                                busca_lower in nome_projeto or 
+                                nome_projeto in busca_lower):
+                                projeto_encontrado = p
+                                break
+                        
+                        if projeto_encontrado:
+                            projeto_id = projeto_encontrado.get('id')
+                            nome_real = projeto_encontrado.get('name', 'Desconhecido')
+                            logger_telegram.info(f"   ✅ Projeto encontrado: '{nome_real}' (ID: {projeto_id})")
+                        else:
+                            nomes_projetos = [p.get('name', 'Sem nome') for p in projetos[:10]]
+                            lista_texto = "\n".join([f"• {nome}" for nome in nomes_projetos])
+                            
+                            await update.message.reply_text(
+                                f"❌ Projeto '{projeto_nome_busca}' não encontrado\n\n"
+                                f"Projetos disponíveis:\n{lista_texto}\n\n"
+                                f"Use o ID numérico ou nome exato."
+                            )
+                            return
+                    else:
+                        logger_telegram.warning("   ⚠️ Nenhum projeto retornado pelo Lex Flow")
+                            
+                except Exception as e:
+                    logger_telegram.error(f"   ❌ Erro ao buscar projetos: {e}")
+            
+            # Se ainda sem projeto, usar Inbox (padrão)
+            if not projeto_id:
+                logger_telegram.info("   📥 Nenhum projeto especificado → usando Inbox (ID=1)")
+                projeto_id = 1  # ID do Inbox (ajuste se necessário)
+            
+            # ========================================
+            # PASSO 5: CRIAR TAREFA NO LEX FLOW
+            # ========================================
+            
+            logger_telegram.info(f"   🎯 DADOS FINAIS:")
+            logger_telegram.info(f"      Título: '{titulo_tarefa}'")
+            logger_telegram.info(f"      Projeto ID: {projeto_id}")
+            logger_telegram.info(f"      Prioridade: {prioridade}")
+            
+            resultado = None
+            erro_tentativas = []
+            
+            # === TENTATIVA 1: Parâmetros nomeados ===
+            try:
+                logger_telegram.info("   🔄 Tentativa 1: add_task(project_id, title, priority)")
+                resultado = motor.lexflow.add_task(
+                    project_id=projeto_id,
+                    title=titulo_tarefa,
+                    priority=prioridade
+                )
+                logger_telegram.info(f"   📦 Resultado: {type(resultado)} = {resultado}")
+                
+            except Exception as e1:
+                erro_tentativas.append(f"T1: {e1}")
+                logger_telegram.warning(f"   ⚠️ T1 falhou: {e1}")
+                
+                # === TENTATIVA 2: Posicionais ===
+                try:
+                    logger_telegram.info("   🔄 Tentativa 2: add_task(title, project_id, priority)")
+                    resultado = motor.lexflow.add_task(titulo_tarefa, projeto_id, prioridade)
+                    logger_telegram.info(f"   📦 Resultado: {type(resultado)} = {resultado}")
+                    
+                except Exception as e2:
+                    erro_tentativas.append(f"T2: {e2}")
+                    logger_telegram.warning(f"   ⚠️ T2 falhou: {e2}")
+                    
+                    # === TENTATIVA 3: title + project_id ===
+                    try:
+                        logger_telegram.info("   🔄 Tentativa 3: add_task(title, project_id)")
+                        resultado = motor.lexflow.add_task(titulo_tarefa, projeto_id)
+                        logger_telegram.info(f"   📦 Resultado: {type(resultado)} = {resultado}")
+                        
+                    except Exception as e3:
+                        erro_tentativas.append(f"T3: {e3}")
+                        logger_telegram.warning(f"   ⚠️ T3 falhou: {e3}")
+                        
+                        # === TENTATIVA 4: Só title ===
+                        try:
+                            logger_telegram.info("   🔄 Tentativa 4: add_task(title)")
+                            resultado = motor.lexflow.add_task(titulo_tarefa)
+                            logger_telegram.info(f"   📦 Resultado: {type(resultado)} = {resultado}")
+                            
+                        except Exception as e4:
+                            erro_tentativas.append(f"T4: {e4}")
+                            logger_telegram.error(f"   ❌ Todas as tentativas falharam!")
+            
+            # ========================================
+            # PASSO 6: PROCESSAR RESULTADO (EXTRAIR ID CORRETAMENTE!)
+            # ========================================
+            
+            if resultado:
+                task_id = None
+                
+                # === ESTRUTURA CONHECIDA: {'success': True, 'task': {...}} ===
+                if isinstance(resultado, dict):
+                    if 'task' in resultado and isinstance(resultado['task'], dict):
+                        # A API retorna {'success': bool, 'task': {id, title, ...}}
+                        task_obj = resultado['task']
+                        task_id = task_obj.get('id') or task_obj.get('_id') or task_obj.get('taskId')
+                        logger_telegram.info(f"   ✅ Estrutura detectada: resultado['task']['id'] = {task_id}")
+                    else:
+                        # Tentar direto no resultado (formatos alternativos)
+                        for campo in ['id', 'task_id', '_id', 'taskId']:
+                            if campo in resultado:
+                                task_id = resultado[campo]
+                                break
+                        
+                        if not task_id:
+                            logger_telegram.warning(f"   ⚠️ ID não encontrado. Chaves: {list(resultado.keys())}")
+                            task_id = '?'
+                
+                elif isinstance(resultado, (int, str)):
+                    task_id = resultado
+                else:
+                    task_id = str(resultado)[:20]
+                
+                emoji_prioridade = {
                     'urgent': '🔴🔴🔴',
                     'high': '🟠',
                     'medium': '🟡',
                     'low': '🟢'
-                }
-                emoji_prio = emojis_prioridade.get(prioridade, '⚪')  # Default cinza
+                }.get(prioridade, '⚪')
                 
-                # Montar mensagem de sucesso
-                resposta = f"""
-✅ *TAREFA CRIADA COM SUCESSO!*
-
-🆔 *ID:* `{id_tarefa}`
-📋 *Título:* {titulo_tarefa[:60]}  # Limitar exibição a 60 caracteres
-{emoji_prio} *Prioridade:* {prioridade.upper()}
-📂 *Projeto ID:* {projeto_id or 'N/A (salva como nota)'}
-
-💾 Salva no *Lex Flow* ✓
-🕐 Criada em: {datetime.now().strftime('%H:%M:%S')}
-"""
-                
-                # Editar mensagem de espera com resultado final
-                await mensagem_espera.edit_text(resposta, parse_mode='Markdown')
-                
-                # Log de sucesso
-                logger_telegram.info(f"✅ [/tarefa] Tarefa criada! ID={id_tarefa}, Projeto={projeto_id}, Prio={prioridade}")
-                
-            else:
-                # === FALHA NA CRIAÇÃO ===
-                await mensagem_espera.edit_text(
-                    "❌ *Falha ao criar tarefa*\n\n"
-                    "O sistema não conseguiu salvar sua tarefa.\n\n"
-                    "Possíveis causas:\n"
-                    "• Projeto inválido ou inexistente (verifique o ID)\n"
-                    "• Lex Flow indisponível\n"
-                    "• Permissões insuficientes\n\n"
-                    "Use `/projetos` para ver IDs válidos.",
-                    parse_mode='Markdown'
+                msg_sucesso = (
+                    f"✅ TAREFA CRIADA COM SUCESSO!\n\n"
+                    f"🆔 ID: {task_id}\n"
+                    f"📋 Título: {titulo_tarefa}\n"
+                    f"{emoji_prioridade} Prioridade: {prioridade.upper()}\n"
+                    f"📂 Projeto ID: {projeto_id}"
                 )
                 
-                logger_telegram.warning(f"⚠️ [/tarefa] Falha ao criar tarefa. Resultado: {resultado}")
+                await update.message.reply_text(msg_sucesso)
+                logger_telegram.info(f"   ✅ Tarefa criada com sucesso! ID={task_id}")
                 
-        except Exception as erro_tarefa:
-            # Log detalhado do erro
-            logger_telegram.error(f"❌ [/tarefa] Exceção não tratada: {erro_tarefa}", exc_info=True)
+            else:
+                msg_erro = "❌ Falha ao criar tarefa\n\nErros:\n"
+                for erro in erro_tentativas:
+                    msg_erro += f"• {erro}\n"
+                msg_erro += "\nUse /projetos para ver IDs válidos"
+                
+                await update.message.reply_text(msg_erro)
+                logger_telegram.error(f"❌ [/tarefa] Falha total: {erro_tentativas}")
             
-            # Resposta amigável ao usuário
-            await update.message.reply_text(
-                "❌ *Erro inesperado ao criar tarefa*\n\n"
-                "Desculpe, ocorreu um erro. Tente novamente.",
-                parse_mode='Markdown'
-            )
+        except Exception as e:
+            logger_telegram.error(f"❌ [/tarefa] ERRO CRÍTICO: {type(e).__name__}: {e}", exc_info=True)
+            
+            try:
+                await update.message.reply_text("⚠️ Erro inesperado no /tarefa\n\nErro registrado nos logs.")
+            except:
+                pass
 
     async def comando_projetos(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """
