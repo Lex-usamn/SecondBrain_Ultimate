@@ -735,10 +735,10 @@ class CoreEngine:
     #
     # O RAG System permite busca semântica em todas as suas notas e documentos,
     # combinando:
-    - TF-IDF Vectorizer (scikit-learn) - leve, sem PyTorch!
-    - Similaridade por Cosseno (scipy/numpy) - instantânea (<1ms)!
-    - Busca Híbrida (vetorial + keyword) via RRF Fusion
-    - Indexação automática do Lex Flow + Memória Interna
+    # - TF-IDF Vectorizer (scikit-learn) - leve, sem PyTorch!
+    # - Similaridade por Cosseno (scipy/numpy) - instantanea (<1ms)
+    # - Busca Híbrida (vetorial + keyword) via RRF Fusion
+    # - Indexação automática do Lex Flow + Memória Interna
     
     # =========================================================================
     
@@ -804,7 +804,7 @@ class CoreEngine:
     # - NVIDIA NIM (z-ai/glm5 com reasoning + streaming)
     # - OpenAI (GPT-4, GPT-3.5-turbo)
     # Google Gemini (gemini-1.5-flash)
-    - Modelos locais via Ollama
+    # - Modelos locais via Ollama
     #
     # É usado pelo Brain Middleware para:
     # - Entender intenção da mensagem do usuário (GLM5)

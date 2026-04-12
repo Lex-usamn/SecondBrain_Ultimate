@@ -38,7 +38,7 @@ import sys
 import logging
 import asyncio
 from datetime import datetime, timedelta
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, TYPE_CHECKING
 from enum import Enum
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -62,15 +62,34 @@ except ImportError:
 # Adiciona o diretório raiz ao path para imports relativos
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-try:
+# ============================================================================
+# 🔥 TYPE CHECKING - EVITA CIRCULAR IMPORT!
+# ============================================================================
+
+if TYPE_CHECKING:
+    # Imports só para type hints (NÃO executam em runtime!)
     from engine.core_engine import CoreEngine
     from engine.insight_generator import InsightGenerator, Insight, WeeklySummary
     from engine.memory_system import MemorySystem
     from integrations.lex_flow_definitivo import LexFlowClient
-    ENGINE_AVAILABLE = True
-except ImportError as e:
-    ENGINE_AVAILABLE = False
-    print(f"⚠️ Módulos do engine não disponíveis: {e}")
+
+# Flag para verificar se engine está disponível (sem importar ainda!)
+_ENGINE_AVAILABLE_FLAG = None
+
+def verificar_engine_disponivel() -> bool:
+    """Verifica se módulos do engine estão disponíveis."""
+    global _ENGINE_AVAILABLE_FLAG
+    if _ENGINE_AVAILABLE_FLAG is not None:
+        return _ENGINE_AVAILABLE_FLAG
+    try:
+        from engine.core_engine import CoreEngine
+        from engine.insight_generator import InsightGenerator
+        _ENGINE_AVAILABLE_FLAG = True
+        return True
+    except ImportError as e:
+        print(f"⚠️ Módulos do engine não disponíveis: {e}")
+        _ENGINE_AVAILABLE_FLAG = False
+        return False
 
 # ============================================================================
 # CONFIGURAÇÃO DE LOGGING
@@ -279,10 +298,10 @@ class SchedulerSystem:
         # Referências para integrações (Lazy Loading)
         self._engine = engine
         self._telegram_bot = telegram_bot
-        self._insight_generator: Optional[InsightGenerator] = None
-        self._memory_system: Optional[MemorySystem] = None
-        self._lex_flow_client: Optional[LexFlowClient] = None
-        
+        self._insight_generator = None   # Type: Optional["InsightGenerator"]
+        self._memory_system = None       # Type: Optional["MemorySystem"]
+        self._lex_flow_client = None     # Type: Optional["LexFlowClient"]
+                
         # Scheduler APScheduler
         self._scheduler: Optional[BackgroundScheduler] = None
         self._scheduler_ativo = False
@@ -334,7 +353,7 @@ class SchedulerSystem:
         return self._engine
     
     @property
-    def gerador_insights(self) -> Optional[InsightGenerator]:
+    def gerador_insights(self) -> Optional["InsightGenerator"]:
         """
         Retorna instância do InsightGenerator (lazy loading).
         
