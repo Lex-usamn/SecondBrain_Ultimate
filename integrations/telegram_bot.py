@@ -298,6 +298,56 @@ def obter_brain_middleware() -> Optional[BrainMiddleware]:
 
 
 
+def definir_brain_middleware_global(brain_instance: Optional[BrainMiddleware]):
+    """
+    Define a instância global do Brain Middleware (injetada pelo scheduler).
+    
+    Isso resolve o problema do Singleton: o iniciar_scheduler.py cria e 
+    inicializa a instância com API key correta, depois injeta aqui para 
+    o bot reutilizar SEM criar uma nova instância sem configuração.
+    
+    Args:
+        brain_instance: Instância já inicializada do BrainMiddleware (ou None)
+    
+    Example:
+        >>> # No iniciar_scheduler.py:
+        >>> from integrations.telegram_bot import definir_brain_middleware_global
+        >>> definir_brain_middleware_global(meu_brain_middleware)
+    """
+    global _brain_middleware
+    
+    _brain_middleware = brain_instance
+    
+    if brain_instance is not None:
+        logger_telegram.info("✅ [BRAIN MW] Instância global INJETADA pelo Scheduler!")
+        logger_telegram.info(f"   🧠 Tipo: {type(brain_instance).__name__}")
+        logger_telegram.info(f"   🆔 ID: {id(brain_instance)}")
+        logger_telegram.info("   ✅ Bot REUTILIZARÁ esta instância (sem recriar)")
+        logger_telegram.info("   ✅ API Key e configurações preservadas!")
+    else:
+        logger_telegram.warning("⚠️ [BRAIN MW] Instância global definida como None")
+
+
+def definir_brain_middleware_global(brain_instance: Optional[BrainMiddleware]):
+    """
+    Define a instância global do Brain Middleware (injetada pelo scheduler).
+    
+    Isso resolve o problema do Singleton: o iniciar_scheduler.py cria e 
+    inicializa a instância, depois injeta aqui para o bot reutilizar.
+    
+    Args:
+        brain_instance: Instância já inicializada do BrainMiddleware (ou None)
+    """
+    global _brain_middleware
+    _brain_middleware = brain_instance
+    
+    if brain_instance is not None:
+        logger_telegram.info("✅ [BRAIN MW] Instância global injetada pelo Scheduler!")
+        logger_telegram.info(f"   🧠 Tipo: {type(brain_instance).__name__}")
+        logger_telegram.info("   ✅ Bot usará esta instância (sem recriar)")
+    else:
+        logger_telegram.info("⚠️ [BRAIN MW] Instância global definida como None")
+
 
 # ============================================================================
 # CLASSE PRINCIPAL: LEX BRAIN TELEGRAM BOT
@@ -1837,43 +1887,25 @@ Exemplo: basta digitar "Lembrar de ligar para o cliente" e enviar ✅
         Handler para Mensagens de Texto Direto (Sem Comando /)
         
         ====================================================================
-        RECURSO MAIS PODEROSO DO BOT (UX Revolution):
+        🆕 v1.4 - BRAIN MIDDLEWARE INTEGRADO (IA Conversacional)!
         
-        Qualquer texto enviado pelo usuário que NÃO começa com barra (/)
-        é automaticamente capturado como nota/ideia. Isso torna o uso
-        extremamente natural, rápido e fluido - como conversar com um amigo.
-        
-        ====================================================================
-        POR QUÊ ISSO É IMPORTANTE?
-        
-        UX Tradicional (ruim):
-        Usuario precisa lembrar: /nota texto aqui
-        → Friction cognitiva alta
-        → Interrupção do fluxo de pensamento
-        
-        UX deste Bot (excelente):
-        Usuario apenas digita e envia
-        → Zero friction
-        → Captura de ideia na velocidade do pensamento
-        → Reduz barreira de entrada drasticamente
+        ORDEM DE PROCESSAMENTO:
+        1. Brain Middleware (IA GLM5 + RAG) → Prioridade máxima!
+           - "Lex, anota isso" → Nota inteligente
+           - "Lex, lembra que..." → Tarefa com prazos
+           - "Lex, o que eu escrevi sobre...?" → Busca RAG + IA
+           
+        2. Auto-Capture Clássico (Fallback)
+           - Se Brain MW não disponível ou falhar
+           - Comportamento original preservado
         
         ====================================================================
         REGRAS DE FILTRAGEM:
         
         1. Mensagens < 3 caracteres: IGNORADAS (provavelmente acidentes)
         2. Mensagens vazias: IGNORADAS
-        3. Demais: CAPTURADAS AUTOMATICAMENTE
+        3. Demais: PROCESSADAS PELO BRAIN MW OU AUTO-CAPTURE
         
-        ====================================================================
-        FEEDBACK AO USUÁRIO:
-        
-        - Sucesso: Confirmação curta e discreta (ID da nota)
-          → Não polui o chat com mensagens longas
-          → Permite usuário continuar enviando rapidamente
-          
-        - Erro: Aviso gentil sugerindo usar /nota explicitamente
-          → Fallback gracefully
-          
         ====================================================================
         """
 
@@ -1893,9 +1925,64 @@ Exemplo: basta digitar "Lembrar de ligar para o cliente" e enviar ✅
                 return
             
             # ========================================
-            # CAPTURA AUTOMÁTICA VIA MOTOR
+            # 🔥🔥🔥 PRIORIDADE 1: BRAIN MIDDLEWARE (IA CONVERSACIONAL)
+            # ========================================
+            if BRAIN_MIDDLEWARE_DISPONIVEL:
+                try:
+                    logger_telegram.info("🧠 [BRAIN MW] Tentando processar com IA...")
+                    
+                    # Obter instância do Brain Middleware (lazy init)
+                    brain = obter_brain_middleware()
+                    
+                    if brain is not None:  # Corrigido: remoção verificação rigorosa
+                        logger_telegram.info("🤖 [BRAIN MW] Processando mensagem com GLM5 + RAG...")
+                        
+                        # Processar mensagem com a IA
+                        resposta_brain = brain.processar(texto_mensagem)
+                        
+                        # Verificar se obteve resposta válida
+                        if resposta_brain is not None:
+                            sucesso = getattr(resposta_brain, 'sucesso', False)
+                            intencao = getattr(resposta_brain, 'intencao', 'desconhecida')
+                            resposta_ia = getattr(resposta_brain, 'resposta_ia', '')
+                            
+                            if sucesso and resposta_ia:
+                                # ✅ SUCESSO! Responder com a IA
+                                logger_telegram.info(f"✅ [BRAIN MW] Intenção detectada: {intencao}")
+                                logger_telegram.info(f"✅ [BRAIN MW] Resposta IA gerada ({len(resposta_ia)} chars)")
+                                
+                                await update.message.reply_text(
+                                    resposta_ia,
+                                    parse_mode='Markdown',
+                                    disable_web_page_preview=True
+                                )
+                                
+                                logger_telegram.info("✅ [BRAIN MW] Resposta enviada ao usuário!")
+                                return  # ✅ ENCERRA AQUI - Processou com IA!
+                            else:
+                                logger_telegram.warning(f"⚠️ [BRAIN MW] Retornou sem sucesso: intencao={intencao}")
+                        else:
+                            logger_telegram.warning("⚠️ [BRAIN MW] retornou None")
+                    else:
+                        logger_telegram.warning("⚠️ [BRAIN MW] Instância disponível mas não inicializada")
+                        
+                except Exception as erro_brain:
+                    # Erro no Brain MW → Fallback para auto-capture
+                    logger_telegram.error(f"❌ [BRAIN MW] Erro ao processar: {erro_brain}", exc_info=True)
+                    logger_telegram.info("📝 [FALLBACK] Indo para auto-capture clássico...")
+            else:
+                logger_telegram.info("⏭️ [BRAIN MW] Não disponível, usando auto-capture")
+            
+            # ========================================
+            # 📝 FALLBACK: CAPTURA AUTOMÁTICA CLÁSSICA (Original)
             # =================================-------
-            # Mesma lógica do /note, mas sem precisar de comando
+            # Só chega aqui se:
+            # - Brain MW não estiver disponível, OU
+            # - Brain MW falhar, OU
+            # - Brain MW não conseguir processar
+            
+            logger_telegram.info("📝 [AUTO-CAPTURA] Executando captura clássica (fallback)")
+            
             resultado = self.motor.capturar(idea=texto_mensagem)
             
             # ========================================

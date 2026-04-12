@@ -736,7 +736,7 @@ Exemplo: {{"intencao": "criar_nota", "confianca": 0.9, "entidades": {{"texto": "
             )
     
     # -----------------------------------------------------------------
-    # AÇÃO: CRIAR TAREFA
+    # AÇÃO: CRIAR TAREFA (CORRIGIDA - Trata lista/dict do add_task)
     # -----------------------------------------------------------------
     
     def _acao_criar_tarefa(
@@ -787,11 +787,38 @@ Exemplo: {{"intencao": "criar_nota", "confianca": 0.9, "entidades": {{"texto": "
             # Buscar inbox padrão
             inbox_result = self._lexflow.get_inbox()
             inbox_id = None
-            if inbox_result.get("success") and inbox_result.get("inbox"):
-                inbox_id = inbox_result["inbox"][0].get("id") if isinstance(inbox_result["inbox"], list) else inbox_result["inbox"].get("id")
+            
+            # ============================================================
+            # 🔥 CORREÇÃO: Tratar get_inbox() que pode retornar lista OU dict!
+            # ============================================================
+            
+            logger_brain.info(f"📦 Tipo do get_inbox(): {type(inbox_result).__name__}")
+            
+            if isinstance(inbox_result, dict):
+                # Formato esperado: {'success': True, 'inbox': [...]}
+                if inbox_result.get("success") and inbox_result.get("inbox"):
+                    inbox_data = inbox_result["inbox"]
+                    if isinstance(inbox_data, list) and len(inbox_data) > 0:
+                        inbox_id = inbox_data[0].get("id") if isinstance(inbox_data[0], dict) else str(inbox_data[0])
+                    elif isinstance(inbox_data, dict):
+                        inbox_id = inbox_data.get("id")
+                        
+            elif isinstance(inbox_result, list):
+                # Formato alternativo: [{...}, ...] ou [{'id': 123}, ...]
+                logger_brain.warning(f"⚠️ get_inbox() retornou lista (formato inesperado)")
+                
+                if len(inbox_result) > 0:
+                    primeiro = inbox_result[0]
+                    if isinstance(primeiro, dict):
+                        inbox_id = primeiro.get("id")
+                    else:
+                        inbox_id = str(primeiro)
             
             if inbox_id:
                 payload["inbox_id"] = inbox_id
+                logger_brain.info(f"✅ Inbox ID encontrado: {inbox_id}")
+            else:
+                logger_brain.info("⏭️ Nenhum inbox encontrado (continuando sem inbox_id)")
             
             # Criar tarefa via Lex Flow
             # NOTA: add_task usa parâmetros posicionais!
@@ -804,13 +831,100 @@ Exemplo: {{"intencao": "criar_nota", "confianca": 0.9, "entidades": {{"texto": "
                 inbox_id=payload.get("inbox_id")
             )
             
-            if resultado.get("success"):
-                task_id = resultado.get("task", {}).get("id", "N/A")
+            # ============================================================
+            # 🔥🔥🔥 CORREÇÃO CRÍVICA: Tratar resposta que pode ser lista OU dicionário!
+            # ============================================================
+            
+            sucesso = False
+            task_id = "N/A"
+            task_data_para_log = {}
+            
+            logger_brain.info(f"📦 Tipo do resultado add_task: {type(resultado).__name__}")
+            logger_brain.info(f"📦 Conteúdo (primeiros 200 chars): {str(resultado)[:200]}")
+            
+            if isinstance(resultado, dict):
+                # Formato esperado (dicionário):
+                # {'success': True, 'task': {'id': 123, ...}}
+                # OU: {'note': {'id': 123, ...}} (algumas versões retornam assim)
                 
+                sucesso = resultado.get("success", False)
+                
+                # Tentar extrair ID de várias formas possíveis
+                task_data = resultado.get("task", resultado.get("note", {}))
+                
+                if isinstance(task_data, dict):
+                    task_id = task_data.get("id", "N/A")
+                    task_data_para_log = task_data
+                elif isinstance(task_data, (int, str)):
+                    task_id = str(task_data)
+                    
+                # Se não tem 'success' explícito, mas tem ID, considera sucesso
+                if not sucesso and task_id != "N/A":
+                    sucesso = True
+                    
+            elif isinstance(resultado, list):
+                # Formato alternativo (lista):
+                # [{'success': True, 'task': {...}}, ...]
+                # OU: [{'id': 123, ...}, ...]
+                # OU: [task_dict]
+                
+                logger_brain.warning(f"⚠️ add_task retornou LISTA (formato inesperado)")
+                logger_brain.warning(f"   Lista com {len(resultado)} itens")
+                
+                if len(resultado) > 0:
+                    primeiro_item = resultado[0]
+                    
+                    if isinstance(primeiro_item, dict):
+                        # Pode ser {'success': True, 'task': {...}}
+                        sucesso = primeiro_item.get("success", False)
+                        
+                        task_data = primeiro_item.get("task", primeiro_item)
+                        
+                        if isinstance(task_data, dict):
+                            task_id = task_data.get("id", "N/A")
+                            task_data_para_log = task_data
+                        elif isinstance(task_data, (int, str)):
+                            task_id = str(task_data)
+                            
+                        # Se não tem success mas tem dados, assume OK
+                        if not sucesso and task_id != "N/A":
+                            sucesso = True
+                            
+                    else:
+                        # Item é um valor direto (int, string, etc.)
+                        task_id = str(primeiro_item)
+                        sucesso = True
+                        
+            else:
+                # Outro formato inesperado (int, string, bool, None, etc.)
+                logger_brain.warning(f"⚠️ add_task retornou tipo inesperado: {type(resultado).__name__}")
+                
+                if resultado is not None:
+                    # Se não é None nem vazio, pode ser o próprio ID
+                    if isinstance(resultado, (int, str, float)):
+                        task_id = str(resultado)
+                        sucesso = True
+                    elif hasattr(resultado, 'id'):
+                        # Objeto com atributo id
+                        task_id = str(resultado.id)
+                        sucesso = True
+                    else:
+                        # Último recurso: converter para string
+                        task_id = str(resultado)[:50]  # Limitar tamanho
+                        sucesso = True
+                else:
+                    task_id = "N/A"
+                    sucesso = False
+            
+            # ============================================================
+            # MONTAR RESPOSTA BASEADO NO SUCESSO
+            # ============================================================
+            
+            if sucesso and task_id != "N/A":
                 logger_brain.info(f"✅ Tarefa criada com ID: {task_id}")
                 
-                # Montar resposta
-                resposta = f"""✅ **Tarefa criada com sucesso!**
+                # Montar resposta formatada
+                resposta = f"""✅ *Tarefa criada com sucesso!*
 
 📋 *{titulo}*"""
 
@@ -835,14 +949,21 @@ Exemplo: {{"intencao": "criar_nota", "confianca": 0.9, "entidades": {{"texto": "
                     ]
                 )
             else:
-                raise Exception(resultado.get("error", "Erro ao criar tarefa"))
+                # Falha na criação
+                erro_msg = f"Resposta inesperada da API: {type(resultado).__name__}"
+                if isinstance(resultado, dict) and resultado.get("error"):
+                    erro_msg = str(resultado.get("error"))
+                elif isinstance(resultado, str):
+                    erro_msg = resultado[:100]
+                    
+                raise Exception(erro_msg)
                 
         except Exception as e:
-            logger_brain.error(f"❌ Erro ao criar tarefa: {e}")
+            logger_brain.error(f"❌ Erro ao criar tarefa: {e}", exc_info=True)
             return RespostaBrain(
                 sucesso=False,
                 acao_executada="criar_tarefa",
-                resposta_ia=f"❌ Não consegui criar a tarefa. Erro: {str(e)[:50]}",
+                resposta_ia=f"❌ Não consegui criar a tarefa. Erro: {str(e)[:100]}",
                 erro=str(e)
             )
     

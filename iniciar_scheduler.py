@@ -279,6 +279,27 @@ def main():
             print("   → 'Lex, lembra que tenho que...' → ✅ Tarefa")
             print("   → 'Lex, o que eu escrevi sobre...?' → 🔍 Busca RAG + IA")
             print()
+            
+            # ============================================================
+            # 🔥🔥🔥 INJETAR INSTÂNCIA NO BOT (SINGLETON COMPARTILHADO)
+            # ============================================================
+            try:
+                from integrations.telegram_bot import definir_brain_middleware_global
+                
+                definir_brain_middleware_global(brain_middleware_instance)
+                print("🔗 Brain Middleware injetado no Telegram Bot (Singleton ativo)")
+                
+            except Exception as e_injecao:
+                print(f"⚠️ Aviso: Não foi possível injetar Brain MW no bot: {e_injecao}")
+                print("   O bot criará sua própria instância (lazy init)")
+        
+        else:
+            print("⚠️ Brain Middleware não disponível (modo clássico)")
+        
+        print()
+        print("   → Envie /start para começar")
+        print("   → Comandos: /ajuda /status /projetos /hoje /nota /tarefa")
+        print()
         
         print("   → Envie /start para começar")
         print("   → Comandos: /ajuda /status /projetos /hoje /nota /tarefa")

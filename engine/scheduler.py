@@ -369,7 +369,7 @@ class SchedulerSystem:
         return self._insight_generator
     
     @property
-    def sistema_memoria(self) -> Optional[MemorySystem]:
+    def sistema_memoria(self) -> Optional["MemorySystem"]:  # ✅ CORRETO!
         """
         Retorna instância do MemorySystem (lazy loading).
         
@@ -385,7 +385,7 @@ class SchedulerSystem:
         return self._memory_system
     
     @property
-    def lexflow(self) -> Optional[LexFlowClient]:
+    def lexflow(self) -> Optional["LexFlowClient"]:
         """
         Retorna instância do LexFlowClient (lazy loading).
         
