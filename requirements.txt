@@ -1,134 +1,17 @@
-# =============================================================================
-# SECOND BRAIN ULTIMATE - Dependências Python (Atualizado: Abril 2026)
-# =============================================================================
-#
-# COMO INSTALAR:
-#   pip install -r requirements.txt
-#
-# VERSÃO RECOMENDADA: Python 3.11 ou 3.12 (Evite 3.14 enquanto onnxruntime não atualizar)
-#
-# ORGANIZAÇÃO POR CATEGORIA:
-#   1. Essenciais (core functionality)
-#   2. Integrações APIs Externas
-#   3. Inteligência Artificial / ML
-#   4. Comunicação (Telegram/Discord)
-#   5. Utilitários e Ferramentas
-#   6. Futuro (descomentar quando necessário)
-#
-# =============================================================================
-
-
-# =============================================================================
-# 1. ESSENCIAIS (Funcionalidades Básicas do Sistema)
-# =============================================================================
-
-# HTTP Requests - Obrigatório para comunicação com Lex Flow API e APIs externas
-requests>=2.31.0
-
-# Manipulação de arquivos .env (variáveis de ambiente para credenciais sensíveis)
-python-dotenv>=1.0.0
-
-# Manipulação avançada de datas e horários (parses flexíveis, timezones)
-python-dateutil>=2.8.2
-
-# YAML Parser - Leitura do config/settings.yaml (configuração centralizada)
-pyyaml>=6.0
-
-# Logging colorido no console (facilita leitura de logs durante desenvolvimento)
-colorlog>=6.7.0
-
-
-# =============================================================================
-# 2. INTEGRAÇÕES COM APIs EXTERNAS
-# =============================================================================
-
-# Google APIs (Gmail, Calendar, Drive, YouTube Studio) - Para automações futuras
-google-api-python-client>=2.100.0
-
-# Google Auth - Autenticação OAuth2 para serviços Google
-google-auth>=2.23.0
-
-# HTTP libraries para Google APIs (dependência transitiva, mas explícita para clareza)
-google-auth-httplib2>=0.2.0
-
-
-# =============================================================================
-# 3. INTELIGÊNCIA ARTIFICIAL / MACHINE LEARNING
-# =============================================================================
-
-# SDK Oficial Anthropic Claude (IA primária para raciocínio complexo)
-anthropic>=0.18.0
-
-# SDK Google Gemini (IA secundária/backup para redundância)
-google-generativeai>=0.3.0
-
-# Embeddings Locais (FastEmbed com modelo QMX) - Para busca semântica/RAG
-# NOTA: O conflito no Python 3.14 ocorre porque o onnxruntime ainda não suporta esta versão.
-# Se precisar usar Python 3.14, você teria que compilar o onnxruntime do código-fonte (não recomendado).
-fastembed>=0.4.1
-
-
-# =============================================================================
-# 4. COMUNICAÇÃO - TELEGRAM BOT (✅ ATIVO - FASE 2 IMPLEMENTADA)
-# =============================================================================
-
-# Biblioteca oficial/não-oficial para bots do Telegram (versão 20+ com async)
-python-telegram-bot>=20.7
-
-
-# =============================================================================
-# 5. COMUNICAÇÃO - DISCORD BOT (FUTURO - FASE 2.5)
-# =============================================================================
-
-# Biblioteca para bots do Discord (comunidade, notificações)
-# discord.py>=2.3.0
-
-
-# =============================================================================
-# 6. UTILITÁRIOS E FERRAMENTAS AUXILIARES
-# =============================================================================
-
-# Web Scraping (Beautiful Soup) - Para web clips e extração de conteúdo de URLs
-beautifulsoup4>=4.12.0
-
-# Transcrição de áudio (Whisper OpenAI) - Para voice notes do Telegram
-# openai-whisper>=20231117
-
-
-# =============================================================================
-# 7. AGENDAMENTO E AUTOMAÇÕES (FUTURO - FASE 3)
-# =============================================================================
-
-# Agendador de tarefas (APScheduler)
-apscheduler>=3.10.0
-
-
-# =============================================================================
-# 8. BANCO DE DADOS VETORIAL (FUTURO - FASE 4 - RAG)
-# =============================================================================
-
-# Vector Search em SQLite (leve, local, sem servidor separado)
-# sqlite-vec>=0.1.0
-
-# Vector Search em PostgreSQL (produção pesada, escalável)
-# pgvector>=0.2.0
-
-
-# =============================================================================
-# 9. DESENVOLVIMENTO E TESTES (Opcional)
-# =============================================================================
-
-# Framework de testes
-# pytest>=7.4.0
-
-# Coverage de testes
-# pytest-cov>=4.1.0
-
-# Type checking estático
-# mypy>=1.5.0
-
-# Formatação automática de código
-# black>=23.0.0
-
-# Linter
-# flake8>=6.1.0
+anyio==4.13.0
+APScheduler==3.11.2
+certifi==2026.2.25
+charset-normalizer==3.4.7
+colorlog==6.10.1
+h11==0.16.0
+httpcore==1.0.9
+httpx==0.28.1
+idna==3.11
+python-dateutil==2.9.0.post0
+python-dotenv==1.2.2
+python-telegram-bot==22.7
+PyYAML==6.0.3
+requests==2.33.1
+six==1.17.0
+tzlocal==5.3.1
+urllib3==2.6.3

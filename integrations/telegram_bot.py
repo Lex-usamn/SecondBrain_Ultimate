@@ -1,12 +1,22 @@
 """
 ================================================================================
-LEX BRAIN TELEGRAM BOT v1.0 - Interface Mobile do Second Brain Ultimate
+LEX BRAIN TELEGRAM BOT v1.4 - Interface Mobile do Second Brain Ultimate
 ================================================================================
 
-VERSÃO: 1.0 (MVP Funcional - Produção Ready)
-DATA: 2026-04-09
+VERSÃO: 1.4 (Brain Middleware Integrado - IA Assistente Pessoal)
+DATA: 11/04/2026 (Atualizado)
 AUTOR: Lex-Usamn | Second Brain Ultimate System
 STATUS: ✅ Produção (Pronto para deploy)
+
+NOVIDADES v1.4:
+--------------
+🧠 BRAIN MIDDLEWARE INTEGRADO!
+   - Conversação natural em vez de só comandos
+   - "Lex, anota isso" → ✅ Nota criada
+   - "Lex, lembra que tenho que..." → ✅ Tarefa criada  
+   - "Lex, o que eu escrevi sobre...?" → 🔍 Busca RAG + Resposta IA
+   - "Lex, me dá ideias de vídeo" → 💡 Brainstorm personalizado
+   - IA entende intenção e executa ações automaticamente!
 
 FUNCIONALIDADES PRINCIPAIS:
 ---------------------------
@@ -21,19 +31,22 @@ FUNCIONALIDADES PRINCIPAIS:
 ✅ Captura automática de mensagens diretas (sem comando)
 ✅ Suporte a tags personalizadas (--tags)
 ✅ Seleção de projeto (--projeto) e prioridade (--prioridade)
+🆕 Conversação natural via Brain Middleware (IA GLM5 + RAG)
 
 INTEGRAÇÃO COM CORE ENGINE:
 ----------------------------
 Este bot usa EXCLUSIVAMENTE o CoreEngine (Singleton) para todas as operações.
 Não acessa diretamente o LexFlowClient - tudo passa pelo motor orquestrador.
+Mensagens naturais são processadas pelo BrainMiddleware (camada de IA).
 
 PADRÃO DE PROJETO:
 ------------------
 - CoreEngine Singleton (uma única instância compartilhada)
 - Lazy Initialization do motor (só inicia quando recebe primeiro comando)
+- Brain Middleware com lazy initialization (só inicia quando necessário)
 - Logging completo de toda interação (segurança + debug + audit trail)
 - Tratamento robusto de erros (nunca crasha, sempre responde ao usuário)
-- Mensagens de feedback visual (⏳ Capturando... → ✅ Sucesso!)
+- Mensagens de feedback visual (⏳ Processando... → ✅ Resultado!)
 
 SEGURANÇA:
 ----------
@@ -50,16 +63,13 @@ COMO USAR:
 4. Enviar /start no @Lex_Cerebro_bot no Telegram
 5. Pronto para usar!
 
-EXEMPLOS DE INTERAÇÃO:
---------------------
+EXEMPLOS DE INTERAÇÃO (COMANDOS):
+--------------------------------
 Você: /hoje
 Bot: 📋 SUAS PRIORIDADES DE HOJE:
      1. 🔴 Estudar SASS para novo projeto
      2. 🟠 Gravar vídeo sobre Bitcoin
      3. 🟡 Revisar contrato do cliente
-
-Você: Ideia incrível para vídeo sobre criptomoedas
-Bot: ✅ *Capturada!* ID: 42
 
 Você: /tarefa Editar vídeo #12 --projeto Canais Dark --prioridade alta
 Bot: ✅ *TAREFA CRIADA COM SUCESSO!*
@@ -68,11 +78,24 @@ Bot: ✅ *TAREFA CRIADA COM SUCESSO!*
      🟠 Prioridade: HIGH
      📂 Projeto ID: 5
 
-Você: /nota Preciso comprar microfone novo --tags compras equipamento urgente
-Bot: ✅ *NOTA CAPTURADA COM SUCESSO!*
-     🆔 ID: 44
-     📝 Título: Preciso comprar microfone novo
-     🏷️ Tags: compras, equipamento, urgente
+EXEMPLOS DE INTERAÇÃO (CONVERSAÇÃO NATURAL - BRAIN MIDDLEWARE):
+---------------------------------------------------------------
+Você: Lex, anota que preciso comprar microfone Blue Yeti
+Bot: ✅ *Nota criada com sucesso!*
+     📝 *Comprar microfone Blue Yeti para Canal Dark*
+     💾 Salvo no Lex Flow ✓
+     💡 Quer que eu crie como tarefa também?
+
+Você: Lex, lembra que tenho que terminar o vídeo até sexta
+Bot: ✅ *Tarefa criada com sucesso!*
+     📋 *Terminar o vídeo*
+     📅 Prazo: 2026-04-18 (sexta-feira)
+     ⚡ Prioridade: 🟡 Media
+     Quer que eu crie uma nota com mais detalhes?
+
+Você: Lex, o que eu já escrevi sobre YouTube?
+Bot: 🔍 *Encontrei 47 referências sobre 'YouTube'*
+     [Resposta detalhada gerada pela IA com base nos seus dados...]
 
 DEPENDÊNCIAS:
 ------------
@@ -98,6 +121,20 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # Core Engine (motor principal - Singleton Pattern)
 from engine.core_engine import CoreEngine
 
+# ============================================================================
+# IMPORTAÇÃO DO BRAIN MIDDLEWARE (IA Assistente Pessoal)
+# ============================================================================
+
+try:
+    from engine.brain_middleware import BrainMiddleware, RespostaBrain
+    BRAIN_MIDDLEWARE_DISPONIVEL = True
+    logger_brain_import = logging.getLogger('brain_middleware_import')
+except ImportError as e:
+    BRAIN_MIDDLEWARE_DISPONIVEL = False
+    print(f"⚠️  Brain Middleware não disponível ainda: {e}")
+    print("   O bot funcionará em modo clássico (sem IA conversacional)")
+    print("   Após implementar brain_middleware.py, reinicie o bot")
+
 
 # ============================================================================
 # IMPORTAÇÃO DA BIBLIOTECA PYTHON-TELEGRAM-BOT
@@ -118,6 +155,45 @@ except ImportError:
     LIB_TELEGRAM_DISPONIVEL = False
     print("⚠️  Biblioteca python-telegram-bot não instalada!")
     print("   Instale com: pip install python-telegram-bot>=20.7")
+
+# ============================================================================
+# CONFIGURAÇÃO DE LOGGING ESPECÍFICA DO TELEGRAM BOT
+# ============================================================================
+
+# Criar diretório de logs se não existir (evita erro na primeira execução)
+os.makedirs('logs', exist_ok=True)
+
+# Logger específico e dedicado ao Telegram Bot (separado do core_engine.log)
+logger_telegram = logging.getLogger('TelegramBot')
+
+# Configurar handlers apenas se ainda não foram configurados (evita duplicação de logs em re-inicializações)
+if not logger_telegram.handlers:
+    # Handler para arquivo de log (persistente - guarda histórico completo)
+    handler_arquivo = logging.FileHandler(
+        'logs/telegram_bot.log',
+        encoding='utf-8',
+        mode='a'  # Modo append (adiciona ao invés de sobrescrever)
+    )
+    
+    # Handler para console (visível em tempo real durante desenvolvimento)
+    handler_console = logging.StreamHandler()
+    
+    # Formatador unificado para ambos os handlers (fácil de ler e parsear)
+    formatador = logging.Formatter(
+        fmt='%(asctime)s | %(name)-15s | %(levelname)-8s | %(message)s',
+        datefmt='%H:%M:%S'
+    )
+    
+    # Aplicar formatador aos handlers
+    handler_arquivo.setFormatter(formatador)
+    handler_console.setFormatter(formatador)
+    
+    # Registrar handlers no logger
+    logger_telegram.addHandler(handler_arquivo)
+    logger_telegram.addHandler(handler_console)
+    logger_telegram.setLevel(logging.INFO)
+
+
 
 
 # ============================================================================
@@ -156,6 +232,71 @@ if not logger_telegram.handlers:
     logger_telegram.addHandler(handler_arquivo)
     logger_telegram.addHandler(handler_console)
     logger_telegram.setLevel(logging.INFO)
+
+
+# ============================================================================
+# VARIÁVEL GLOBAL PARA BRAIN MIDDLEWARE (Lazy Initialization)
+# ============================================================================
+
+# Instância do Brain Middleware (inicializada sob demanda)
+_brain_middleware: Optional[BrainMiddleware] = None
+
+
+def obter_brain_middleware() -> Optional[BrainMiddleware]:
+    """
+    Obtém (ou cria) instância do Brain Middleware com lazy initialization.
+    
+    Esta função implementa o padrão Singleton para o Brain Middleware,
+    garantindo que apenas uma instância seja criada e reutilizada.
+    
+    A inicialização é preguiçosa (lazy): só conecta no LLM e RAG quando
+    a primeira mensagem natural é recebida, economizando recursos.
+    
+    Returns:
+        BrainMiddleware inicializado e pronto para uso, ou None se:
+        - Brain Middleware não está disponível (módulo não implementado)
+        - Falha na inicialização (LLM/RAG indisponíveis)
+    
+    Example:
+        >>> brain = obter_brain_middleware()
+        >>> if brain:
+        ...     resultado = brain.processar("Lex, anota isso")
+    """
+    global _brain_middleware
+    
+    # Se já temos instância, retornar direto (cache)
+    if _brain_middleware is not None:
+        return _brain_middleware
+    
+    # Verificar se módulo está disponível
+    if not BRAIN_MIDDLEWARE_DISPONIVEL:
+        logger_telegram.warning("⚠️ Brain Middleware não disponível (módulo não importado)")
+        return None
+    
+    try:
+        logger_telegram.info("🧠 [BRAIN MW] Inicializando Brain Middleware (Lazy Init)...")
+        
+        # Criar nova instância
+        _brain_middleware = BrainMiddleware()
+        
+        # Inicializar (conecta LLM, RAG, Lex Flow)
+        sucesso = _brain_middleware.inicializar()
+        
+        if sucesso:
+            logger_telegram.info("✅ [BRAIN MW] Brain Middleware inicializado e PRONTO!")
+            logger_telegram.info("   🤖 Mensagens naturais serão processadas por IA")
+            return _brain_middleware
+        else:
+            logger_telegram.error("❌ [BRAIN MW] Falha na inicialização do Brain Middleware")
+            _brain_middleware = None
+            return None
+            
+    except Exception as e:
+        logger_telegram.error(f"❌ [BRAIN MW] Erro crítico ao inicializar Brain Middleware: {e}", exc_info=True)
+        _brain_middleware = None
+        return None
+
+
 
 
 # ============================================================================
