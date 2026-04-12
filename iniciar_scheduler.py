@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
 """
 ================================================================================
-INICIALIZADOR COMPLETO DO LEX-BRAIN HYBRID (v1.0.3 - ARQUITETURA FINAL)
+INICIALIZADOR COMPLETO DO LEX-BRAIN HYBRID (v1.1 - BRAIN MIDDLEWARE READY)
 ================================================================================
 
-Arquitetura Corrigida:
-- MAIN THREAD: Telegram Bot Polling (obrigatório!)
-- BACKGROUND:   Scheduler System (APScheduler)
+Arquitetura Final:
+- MAIN THREAD:   Telegram Bot Polling (obrigatório!)
+- BACKGROUND:    Scheduler System (APScheduler)
+- 🆕 BRAIN:      Brain Middleware IA Assistente (conversação natural)
 
 Autor: Lex-Usamn
-Data: 10/04/2026
-Versão: 1.0.3
+Data: 12/04/2026
+Versão: 1.1
 Status: ✅ PRODUÇÃO
 ================================================================================
 """
@@ -29,7 +30,8 @@ diretorio_raiz = Path(__file__).parent
 sys.path.insert(0, str(diretorio_raiz))
 
 print("=" * 70)
-print("🧠 LEX-BRAIN HYBRID v1.0.3 - INICIALIZAÇÃO COMPLETA")
+print("🧠 LEX-BRAIN HYBRID v1.1 - INICIALIZAÇÃO COMPLETA")
+print("   🆕 Brain Middleware (IA Assistente) INCLUÍDO!")
 print("=" * 70)
 print()
 
@@ -61,6 +63,21 @@ except ImportError as e:
     print(f"   ⚠️ LexBrainTelegramBot: {e}")
     telegram_disponivel = False
 
+# ============================================================================
+# 🆕 BRAIN MIDDLEWARE (NOVO!)
+# ============================================================================
+
+brain_middleware_disponivel = False
+brain_middleware_instance = None
+
+try:
+    from engine.brain_middleware import BrainMiddleware
+    print("   ✅ BrainMiddleware (IA Assistente)")
+    brain_middleware_disponivel = True
+except ImportError as e:
+    print(f"   ⚠️ BrainMiddleware: {e} (bot usará modo clássico)")
+    brain_middleware_disponivel = False
+
 print()
 
 # ============================================================================
@@ -78,11 +95,12 @@ engine_instance = None
 
 def inicializar_tudo():
     """
-    Inicializa Engine + Scheduler (background).
+    Inicializa Engine + Scheduler + Brain Middleware.
     
     O Telegram Bot será iniciado DEPOIS na main thread.
     """
     global scheduler_instance, telegram_bot_instance, engine_instance
+    global brain_middleware_instance
     
     # =========================================================================
     # FASE 1: CORE ENGINE
@@ -140,6 +158,46 @@ def inicializar_tudo():
         return False
     
     # =========================================================================
+    # 🆕 FASE 2.5: BRAIN MIDDLEWARE (IA ASSISTENTE)
+    # =========================================================================
+    
+    print()
+    print("=" * 70)
+    print("🧠 FASE 2.5: BRAIN MIDDLEWARE (IA ASSISTENTE PESSOAL)")
+    print("=" * 70)
+    
+    if brain_middleware_disponivel:
+        try:
+            brain_middleware_instance = BrainMiddleware()
+            
+            sucesso_bm = brain_middleware_instance.inicializar()
+            
+            if sucesso_bm:
+                print(f"✅ BrainMiddleware INICIALIZADO E PRONTO!")
+                print(f"   🤖 IA: GLM5 (NVIDIA NIM)")
+                print(f"   🔍 RAG: TF-IDF + Busca Híbrida")
+                print(f"   💬 Conversação natural ATIVA!")
+                
+                # Injeta o Brain Middleware no bot (se disponível)
+                if telegram_disponivel:
+                    # O bot já vai pegar automaticamente via obter_brain_middleware()
+                    # Mas podemos pré-inicializar aqui para garantir
+                    pass
+                
+            else:
+                print(f"⚠️ BrainMiddleware não conseguiu inicializar")
+                print(f"   (Bot usará modo clássico: /comandos)")
+                brain_middleware_instance = None
+                
+        except Exception as e:
+            print(f"❌ Erro no BrainMiddleware: {e}")
+            print(f"   (Bot usará modo clássico: /comandos)")
+            brain_middleware_instance = None
+    else:
+        print(f"⏭️ BrainMiddleware não disponível (módulo não encontrado)")
+        print(f"   (Bot usará modo clássico: /comandos)")
+    
+    # =========================================================================
     # FASE 3: TELEGRAM BOT (SÓ CRIA, NÃO INICIA AINDA!)
     # =========================================================================
     
@@ -158,7 +216,10 @@ def inicializar_tudo():
             # Conectar o bot ao scheduler (para envio de mensagens automáticas)
             scheduler_instance.telegram_bot = telegram_bot_instance
             
+            status_brain = "🟢 ATIVO (Conversação Natural)" if brain_middleware_instance else "⚠️ Modo Clássico"
+            
             print(f"✅ @Lex_Cerebro_bot criado e conectado ao Scheduler!")
+            print(f"🧠 Brain Middleware: {status_brain}")
             print(f"💡 O bot será iniciado na main thread (próximo passo)")
             
         except Exception as e:
@@ -177,7 +238,7 @@ def main():
     Função principal.
     
     Ordem de execução:
-    1. Inicializar Engine + Scheduler (rápido)
+    1. Inicializar Engine + Scheduler + Brain MW (rápido)
     2. Iniciar Telegram Bot na MAIN THREAD (bloqueia aqui!)
     """
     inicio_total = time.time()
@@ -187,7 +248,7 @@ def main():
     print()
     
     # -------------------------------------------------------------------------
-    # PASSO 1: Inicializar tudo (Engine + Scheduler)
+    # PASSO 1: Inicializar tudo (Engine + Scheduler + Brain MW)
     # -------------------------------------------------------------------------
     
     sucesso = inicializar_tudo()
@@ -209,6 +270,16 @@ def main():
         print("✅ TUDO PRONTO!")
         print()
         print("📱 @Lex_Cerebro_bot está ONLINE e OUVINDO!")
+        print()
+        
+        if brain_middleware_instance:
+            print("🧠 *BRAIN MIDDLEWARE ATIVO!*")
+            print("   → Conversação natural HABILITADA!")
+            print("   → 'Lex, anota isso' → ✅ Nota criada")
+            print("   → 'Lex, lembra que tenho que...' → ✅ Tarefa")
+            print("   → 'Lex, o que eu escrevi sobre...?' → 🔍 Busca RAG + IA")
+            print()
+        
         print("   → Envie /start para começar")
         print("   → Comandos: /ajuda /status /projetos /hoje /nota /tarefa")
         print()
@@ -229,8 +300,6 @@ def main():
         print()
         
         # ✅ INICIAR O POLLING DO TELEGRAM NA MAIN THREAD!
-        # Este método BLOQUEIA e fica ouvindo mensagens para sempre
-        # É exatamente o que queremos - o python-telegram-bot exige main thread!
         try:
             telegram_bot_instance.iniciar()  # ← BLOQUEIA AQUI!
         except KeyboardInterrupt:
@@ -248,7 +317,6 @@ def main():
         print("⌨️  Pressione Ctrl+C para encerrar")
         
         try:
-            # Manter vivo sem Telegram (loop simples)
             while True:
                 time.sleep(60)
                 hora = time.strftime("%H:%M:%S")
@@ -258,7 +326,7 @@ def main():
             print("\n\n⛔ Ctrl+C recebido...")
     
     # -------------------------------------------------------------------------
-    # DESLIGAMENTO (só chega aqui quando o bot/loop é parado)
+    # DESLIGAMENTO
     # -------------------------------------------------------------------------
     
     print()
@@ -266,7 +334,6 @@ def main():
     print("⛔ DESLIGANDO SISTEMA")
     print("=" * 70)
     
-    # Parar scheduler
     if scheduler_instance:
         try:
             scheduler_instance.parar()
