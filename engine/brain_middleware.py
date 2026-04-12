@@ -736,7 +736,7 @@ Exemplo: {{"intencao": "criar_nota", "confianca": 0.9, "entidades": {{"texto": "
             )
     
     # -----------------------------------------------------------------
-    # AÇÃO: CRIAR TAREFA (CORRIGIDA - Trata lista/dict do add_task)
+    # AÇÃO: CRIAR TAREFA (v2.0 - Inbox vs Projeto)
     # -----------------------------------------------------------------
     
     def _acao_criar_tarefa(
@@ -747,6 +747,10 @@ Exemplo: {{"intencao": "criar_nota", "confianca": 0.9, "entidades": {{"texto": "
     ) -> RespostaBrain:
         """
         Cria uma tarefa no Lex Flow baseada na mensagem.
+        
+        LÓGICA INTELIGENTE:
+        - Tem projeto específico? → add_task() no projeto
+        - Sem projeto?           → add_note() na CAIXA DE ENTRADA (Inbox)
         
         Args:
             intencao: Intenção com entidades extraídas
@@ -762,199 +766,250 @@ Exemplo: {{"intencao": "criar_nota", "confianca": 0.9, "entidades": {{"texto": "
         conteudo = intencao.entidades.get("conteudo", mensagem)
         titulo = conteudo[:80] + ("..." if len(conteudo) > 80 else "")
         
-        # Preparar payload da tarefa
-        payload: dict[str, Any] = {
-            "title": titulo,
-            "description": f"[Criado via Brain Middleware - {datetime.now().strftime('%d/%m/%Y %H:%M')}]\n\n{mensagem}"
-        }
-        
-        # Adicionar prazo se detectado
-        if "prazo" in intencao.entidades:
-            payload["due_date"] = intencao.entidades["prazo"]
-        
-        # Adicionar prioridade (padrão: média)
+        # Prioridade (padrão: média)
         prioridade = intencao.entidades.get("prioridade", PrioridadeTarefa.MEDIA.value)
-        payload["priority"] = prioridade
+        
+        # Normalizar prioridade para inglês (API espera "medium", não "media")
+        prioridade_en = prioridade
+        if prioridade_en == "media":
+            prioridade_en = "medium"
+        elif prioridade_en == "alta":
+            prioridade_en = "high"
+        elif prioridade_en == "baixa":
+            prioridade_en = "low"
+        elif prioridade_en == "urgente":
+            prioridade_en = "urgent"
         
         # Tentar encontrar projeto
         projeto_id = None
+        projeto_nome = None
+        
         if "projeto_sugerido" in intencao.entidades:
             projeto_id = self._buscar_projeto_id(intencao.entidades["projeto_sugerido"])
             if projeto_id:
-                payload["project_id"] = projeto_id
+                projeto_nome = intencao.entidades["projeto_sugerido"]
+        
+        # Verificar se temos um projeto válido (ID > 0)
+        tem_projeto_valido = projeto_id and int(projeto_id) > 0
         
         try:
-            # Buscar inbox padrão
-            inbox_result = self._lexflow.get_inbox()
-            inbox_id = None
-            
-            # ============================================================
-            # 🔥 CORREÇÃO: Tratar get_inbox() que pode retornar lista OU dict!
-            # ============================================================
-            
-            logger_brain.info(f"📦 Tipo do get_inbox(): {type(inbox_result).__name__}")
-            
-            if isinstance(inbox_result, dict):
-                # Formato esperado: {'success': True, 'inbox': [...]}
-                if inbox_result.get("success") and inbox_result.get("inbox"):
-                    inbox_data = inbox_result["inbox"]
-                    if isinstance(inbox_data, list) and len(inbox_data) > 0:
-                        inbox_id = inbox_data[0].get("id") if isinstance(inbox_data[0], dict) else str(inbox_data[0])
-                    elif isinstance(inbox_data, dict):
-                        inbox_id = inbox_data.get("id")
-                        
-            elif isinstance(inbox_result, list):
-                # Formato alternativo: [{...}, ...] ou [{'id': 123}, ...]
-                logger_brain.warning(f"⚠️ get_inbox() retornou lista (formato inesperado)")
-                
-                if len(inbox_result) > 0:
-                    primeiro = inbox_result[0]
-                    if isinstance(primeiro, dict):
-                        inbox_id = primeiro.get("id")
-                    else:
-                        inbox_id = str(primeiro)
-            
-            if inbox_id:
-                payload["inbox_id"] = inbox_id
-                logger_brain.info(f"✅ Inbox ID encontrado: {inbox_id}")
-            else:
-                logger_brain.info("⏭️ Nenhum inbox encontrado (continuando sem inbox_id)")
-            
-            # Criar tarefa via Lex Flow
-            # NOTA: add_task usa parâmetros posicionais!
-            resultado = self._lexflow.add_task(
-                payload.get("project_id", 0),  # project_id posicional
-                payload["title"],
-                description=payload.get("description", ""),
-                due_date=payload.get("due_date"),
-                priority=payload.get("priority", "media"),
-                inbox_id=payload.get("inbox_id")
-            )
-            
-            # ============================================================
-            # 🔥🔥🔥 CORREÇÃO CRÍVICA: Tratar resposta que pode ser lista OU dicionário!
-            # ============================================================
-            
-            sucesso = False
+            resultado = None
             task_id = "N/A"
-            task_data_para_log = {}
+            modo_criacao = ""
             
-            logger_brain.info(f"📦 Tipo do resultado add_task: {type(resultado).__name__}")
-            logger_brain.info(f"📦 Conteúdo (primeiros 200 chars): {str(resultado)[:200]}")
+            # ============================================================
+            # 🔥 DECISÃO: PROJETO vs CAIXA DE ENTRADA (INBOX)
+            # ============================================================
             
-            if isinstance(resultado, dict):
-                # Formato esperado (dicionário):
-                # {'success': True, 'task': {'id': 123, ...}}
-                # OU: {'note': {'id': 123, ...}} (algumas versões retornam assim)
+            if tem_projeto_valido:
+                # ========================================
+                # CASO 1: Tem projeto → Criar tarefa no projeto
+                # ========================================
+                modo_criacao = "projeto"
                 
-                sucesso = resultado.get("success", False)
+                logger_brain.info(f"📁 Criando tarefa no PROJETO {projeto_id} ('{projeto_nome}')...")
                 
-                # Tentar extrair ID de várias formas possíveis
-                task_data = resultado.get("task", resultado.get("note", {}))
+                # Preparar descrição
+                descricao = f"[Criado via Brain Middleware - {datetime.now().strftime('%d/%m/%Y %H:%M')}]\n\n{mensagem}"
                 
-                if isinstance(task_data, dict):
-                    task_id = task_data.get("id", "N/A")
-                    task_data_para_log = task_data
-                elif isinstance(task_data, (int, str)):
-                    task_id = str(task_data)
+                # Adicionar prazo se detectado
+                due_date = None
+                if "prazo" in intencao.entidades:
+                    due_date = intencao.entidades["prazo"]
+                
+                try:
+                    resultado = self._lexflow.add_task(
+                        int(projeto_id),       # project_id (int)
+                        titulo,               # title (str)
+                        description=descricao,
+                        priority=prioridade_en,
+                        due_date=due_date
+                    )
                     
-                # Se não tem 'success' explícito, mas tem ID, considera sucesso
-                if not sucesso and task_id != "N/A":
-                    sucesso = True
+                    logger_brain.info(f"📦 Resultado add_task: {type(resultado).__name__}")
                     
-            elif isinstance(resultado, list):
-                # Formato alternativo (lista):
-                # [{'success': True, 'task': {...}}, ...]
-                # OU: [{'id': 123, ...}, ...]
-                # OU: [task_dict]
-                
-                logger_brain.warning(f"⚠️ add_task retornou LISTA (formato inesperado)")
-                logger_brain.warning(f"   Lista com {len(resultado)} itens")
-                
-                if len(resultado) > 0:
-                    primeiro_item = resultado[0]
-                    
-                    if isinstance(primeiro_item, dict):
-                        # Pode ser {'success': True, 'task': {...}}
-                        sucesso = primeiro_item.get("success", False)
-                        
-                        task_data = primeiro_item.get("task", primeiro_item)
-                        
+                    # Extrair ID do resultado
+                    if isinstance(resultado, dict):
+                        task_data = resultado.get("task", resultado.get("note", {}))
                         if isinstance(task_data, dict):
                             task_id = task_data.get("id", "N/A")
-                            task_data_para_log = task_data
                         elif isinstance(task_data, (int, str)):
                             task_id = str(task_data)
+                        # Se não tem success explícito mas tem dados, OK
+                        if task_id != "N/A" and not resultado.get("success"):
+                            resultado["success"] = True
                             
-                        # Se não tem success mas tem dados, assume OK
-                        if not sucesso and task_id != "N/A":
-                            sucesso = True
-                            
-                    else:
-                        # Item é um valor direto (int, string, etc.)
-                        task_id = str(primeiro_item)
-                        sucesso = True
+                    elif isinstance(resultado, list) and len(resultado) > 0:
+                        primeiro = resultado[0]
+                        if isinstance(primeiro, dict):
+                            task_id = primeiro.get("id", primeiro.get("task", {}).get("id", "N/A"))
+                        else:
+                            task_id = str(primeiro)
+                        resultado = {"success": True}
                         
-            else:
-                # Outro formato inesperado (int, string, bool, None, etc.)
-                logger_brain.warning(f"⚠️ add_task retornou tipo inesperado: {type(resultado).__name__}")
-                
-                if resultado is not None:
-                    # Se não é None nem vazio, pode ser o próprio ID
-                    if isinstance(resultado, (int, str, float)):
+                    elif resultado is not None:
                         task_id = str(resultado)
-                        sucesso = True
-                    elif hasattr(resultado, 'id'):
-                        # Objeto com atributo id
-                        task_id = str(resultado.id)
-                        sucesso = True
-                    else:
-                        # Último recurso: converter para string
-                        task_id = str(resultado)[:50]  # Limitar tamanho
-                        sucesso = True
-                else:
-                    task_id = "N/A"
-                    sucesso = False
-            
-            # ============================================================
-            # MONTAR RESPOSTA BASEADO NO SUCESSO
-            # ============================================================
-            
-            if sucesso and task_id != "N/A":
-                logger_brain.info(f"✅ Tarefa criada com ID: {task_id}")
+                        resultado = {"success": True}
+                        
+                except Exception as e_task:
+                    logger_brain.error(f"❌ Erro add_task: {e_task}")
+                    resultado = None
+                    
+            else:
+                # ========================================
+                # CASO 2: Sem projeto → CAIXA DE ENTRADA (INBOX)
+                # ========================================
+                modo_criacao = "inbox"
                 
-                # Montar resposta formatada
-                resposta = f"""✅ *Tarefa criada com sucesso!*
+                logger_brain.info("📥 Sem projeto → Enviando para CAIXA DE ENTRADA (Inbox)")
+                
+                # Montar título formatado como tarefa
+                titulo_inbox = f"📋 {titulo}"
+                
+                # Adicionar prazo ao título se existir
+                if "prazo" in intencao.entidades:
+                    titulo_inbox += f" ⏰ {intencao.entidades['prazo']}"
+                
+                # Ícone de prioridade
+                icones_prioridade = {
+                    "high": "🔴",
+                    "low": "🟢",
+                    "urgent": "🚨",
+                    "medium": "🟡"
+                }
+                if prioridade_en in icones_prioridade:
+                    titulo_inbox += f" {icones_prioridade[prioridade_en]}"
+                
+                # Montar descrição rica
+                descricao_inbox = f"""[Criado via Brain Middleware - {datetime.now().strftime('%d/%m/%Y %H:%M')}]
+
+{mensagem}
+
+{'='*40}
+🤖 *Status:* Aguardando triagem
+⚡ *Prioridade:* {prioridade_en.capitalize()}"""
+                
+                if "prazo" in intencao.entidades:
+                    descricao_inbox += f"\n📅 *Prazo:* {intencao.entidades['prazo']}"
+                
+                descricao_inbox += "\n\n💡 *Ação necessária:* Mover para projeto quando possível"
+                
+                # Tags especiais para identificar como tarefa pendente
+                tags_tarefa = ["tarefa", "inbox", "brain-mw", f"prioridade:{prioridade_en}"]
+                
+                if "prazo" in intencao.entidades:
+                    tags_tarefa.append(f"prazo:{intencao.entidades['prazo']}")
+                
+                # Criar NOTA na Caixa de Entrada via /quicknotes/
+                logger_brain.info(f"📝 Criando nota inbox: '{titulo_inbox}'")
+                
+                try:
+                    resultado = self._lexflow.add_note(
+                        title=titulo_inbox,
+                        content=descricao_inbox,
+                        tags=tags_tarefa
+                    )
+                    
+                    logger_brain.info(f"📦 Resultado add_note: {type(resultado).__name__}")
+                    
+                    # Extrair ID da nota criada
+                    if isinstance(resultado, dict):
+                        note_data = resultado.get("note", resultado)
+                        if isinstance(note_data, dict):
+                            task_id = note_data.get("id", "N/A")
+                        elif isinstance(note_data, (int, str)):
+                            task_id = str(note_data)
+                        else:
+                            task_id = "N/A"
+                            
+                    elif resultado is not None:
+                        task_id = str(resultado)
+                    else:
+                        task_id = "N/A"
+                        
+                    if resultado:
+                        resultado = {"success": True}
+                        
+                except Exception as e_inbox:
+                    logger_brain.error(f"❌ Erro add_note (inbox): {e_inbox}", exc_info=True)
+                    resultado = None
+            
+            # ============================================================
+            # VERIFICAR SUCESSO E MONTAR RESPOSTA
+            # ============================================================
+            
+            sucesso = (resultado is not None) and resultado.get("success", False) and (task_id != "N/A")
+            
+            if sucesso:
+                logger_brain.info(f"✅ Tarefa criada! ID: {task_id} (modo: {modo_criacao})")
+                
+                # Montar resposta conforme o modo de criação
+                if modo_criacao == "inbox":
+                    resposta = f"""✅ *Tarefa enviada para a Caixa de Entrada!*
+
+📋 *{titulo}*
+📥 *Localização:* Caixa de Entrada (Inbox)"""
+
+                    if "prazo" in intencao.entidades:
+                        resposta += f"\n📅 Prazo: {intencao.entidades['prazo']}"
+                    
+                    if prioridade_en != "medium":
+                        icon_prio = {"high": "🔴", "low": "🟢", "urgent": "🚨", "medium": "🟡"}
+                        resposta += f"\n⚡ Prioridade: {icon_prio.get(prioridade_en, '⚪')} {prioridade_en.capitalize()}"
+                    
+                    resposta += """
+
+💡 *Aguardando sua triagem:*
+   • Mover para um projeto específico
+   • Definir sub-tarefas se necessário
+   • Ajustar prazo se preciso"""
+                    
+                    sugestoes = [
+                        "Quer mover para algum projeto?",
+                        "Quer definir lembretes?",
+                        "Quer ver outras tarefas na caixa de entrada?"
+                    ]
+                    
+                else:  # modo_criacao == "projeto"
+                    resposta = f"""✅ *Tarefa criada com sucesso!*
 
 📋 *{titulo}*"""
 
-                if "prazo" in intencao.entidades:
-                    resposta += f"\n📅 Prazo: {intencao.entidades['prazo']}"
-                
-                if prioridade:
+                    if "prazo" in intencao.entidades:
+                        resposta += f"\n📅 Prazo: {intencao.entidades['prazo']}"
+                    
                     icon_prio = {"urgente": "🔴", "alta": "🟠", "media": "🟡", "baixa": "🟢"}
                     resposta += f"\n⚡ Prioridade: {icon_prio.get(prioridade, '⚪')} {prioridade.capitalize()}"
-                
-                if projeto_id:
-                    resposta += f"\n📁 Projeto: {intencao.entidades.get('projeto_sugerido', 'Geral')}"
+                    
+                    if projeto_nome:
+                        resposta += f"\n📁 Projeto: {projeto_nome}"
+                    
+                    sugestoes = [
+                        "Quer que eu crie uma nota com mais detalhes?",
+                        "Quer definir lembretes para esta tarefa?",
+                        "Quer adicionar sub-tarefas?"
+                    ]
                 
                 return RespostaBrain(
                     sucesso=True,
                     acao_executada="criar_tarefa",
                     resposta_ia=resposta,
-                    detalhes={"task_id": task_id, "payload": payload},
-                    sugestoes=[
-                        "Quer que eu crie uma nota com mais detalhes?",
-                        "Quer definir lembretes para esta tarefa?"
-                    ]
+                    detalhes={
+                        "task_id": task_id, 
+                        "titulo": titulo,
+                        "modo_criacao": modo_criacao,
+                        "project_id": projeto_id if tem_projeto_valido else None,
+                        "prioridade": prioridade_en
+                    },
+                    sugestoes=sugestoes
                 )
             else:
                 # Falha na criação
-                erro_msg = f"Resposta inesperada da API: {type(resultado).__name__}"
-                if isinstance(resultado, dict) and resultado.get("error"):
-                    erro_msg = str(resultado.get("error"))
-                elif isinstance(resultado, str):
-                    erro_msg = resultado[:100]
+                erro_msg = "Erro desconhecido"
+                if resultado is None:
+                    erro_msg = "Sem resposta da API"
+                elif isinstance(resultado, dict) and resultado.get("error"):
+                    erro_msg = str(resultado.get("error"))[:100]
                     
                 raise Exception(erro_msg)
                 
@@ -963,10 +1018,11 @@ Exemplo: {{"intencao": "criar_nota", "confianca": 0.9, "entidades": {{"texto": "
             return RespostaBrain(
                 sucesso=False,
                 acao_executada="criar_tarefa",
-                resposta_ia=f"❌ Não consegui criar a tarefa. Erro: {str(e)[:100]}",
+                resposta_ia=f"❌ Não consegui criar a tarefa.\n\nErro: `{str(e)[:80]}`\n\n_Tente novamente ou use /tarefa manualmente_",
                 erro=str(e)
-            )
-    
+            ) 
+
+            
     def _buscar_projeto_id(self, nome_projeto: str) -> Optional[int]:
         """
         Busca o ID de um projeto pelo nome.
