@@ -1,1683 +1,824 @@
 """
-============================================
-BRAIN MIDDLEWARE v1.0 - IA Assistente Pessoal
-============================================
+================================================================================
+BRAIN MIDDLEWARE v2.1.1 - IA Assistente Pessoal CONVERSACIONAL
+================================================================================
 
-Camada inteligente que transforma mensagens naturais em ações executadas pelo sistema.
+AUTOR: Mago-Usamn | DATA: 14/04/2026 (CORREÇÃO CRÍTICA!)
+NOME DO ASSISTENTE: MAGO 🧙
+VERSÃO: 2.1.1 (Fix: Classificador Agressivo + Conversacional)
 
-Autor: Lex-Usamn
-Data: 11/04/2026
-Status: ✅ IMPLEMENTADO
+MUDANÇAS v2.1.1:
+✅ Sistema de CLARIFICAÇÃO ativo (pergunta antes de criar tarefas)
+✅ Detecção de CONVERSA CASUAL (não transforma tudo em ação)
+✅ Thresholds ajustados (só executa se for MUITO óbvio)
+✅ Contexto de conversação mantido entre mensagens
+✅ Respostas amigáveis e naturais
 
-Capacidades:
-- 📝 Criar notas (intenção implícita)
-- ✅ Criar tarefas (prazos, prioridades, projetos)
-- 🔍 Buscar informações (RAG + análise)
-- 💡 Gerar ideias (brainstorm com base nos dados)
-- 📊 Consultar métricas e status
-- 🎯 Criar planos e estratégias
-- 🗣️ Transcrever e processar áudios
-
-Integrações:
-- LLM Client (GLM5/NVIDIA NIM) para entendimento de intenção
-- RAG System para busca contextual de informações
-- Lex Flow API para persistência de notas/tarefas
-- Core Engine como orquestrador central
+================================================================================
 """
 
-import logging
 import re
-from datetime import datetime, timedelta
-from enum import Enum
-from typing import Any, Optional
+import json
+import logging
+from datetime import datetime
+from typing import Optional, Dict, Any, List
 from dataclasses import dataclass, field
+from enum import Enum
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    pass  # Type hints serão resolvidos em runtime
 
+# Imports com TYPE_CHECKING para evitar circular imports
+if TYPE_CHECKING:
+    from engine.rag_system import RAGSystem
+    from engine.llm_client import LLMClient
+    from integrations.lex_flow_definitivo import LexFlowClient
+    from engine.brain_acoes import ExecutorAcoes
 
-# ============================================================================
-# CONFIGURAÇÃO DE LOGGING
-# ============================================================================
-
-logger_brain = logging.getLogger("brain_middleware")
-logger_brain.setLevel(logging.DEBUG)
-
-# Handler para arquivo de log
-file_handler = logging.FileHandler(
-    "logs/brain_middleware.log",
-    encoding="utf-8"
+from engine.brain_types import (
+    logger_brain,
+    TipoIntencao,
+    IntencaoDetectada,
+    ContextoConversa,
+    RespostaBrain,
+    NOME_ASSISTENTE,
+    NOME_ASSISTENTE_DISPLAY,
+    PrioridadeTarefa,
+    converter_prazo_relativo,
+    normalizar_texto,
+    extrair_entidades
 )
-file_handler.setLevel(logging.DEBUG)
-
-# Formato detalhado
-formatter = logging.Formatter(
-    "%(asctime)s | %(levelname)-8s | %(funcName)-25s | %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S"
-)
-file_handler.setFormatter(formatter)
-
-# Evita duplicação de handlers
-if not logger_brain.handlers:
-    logger_brain.addHandler(file_handler)
 
 
-# ============================================================================
-# ENUMERAÇÕES E TIPOS
-# ============================================================================
+# =============================================================================
+# CONSTANTES DE CONFIGURAÇÃO
+# =============================================================================
 
-class TipoIntencao(Enum):
-    """Tipos de intenções que o Brain Middleware pode detectar."""
+# 🎯 THRESHOLDS DE CONFIANCA (AJUSTADOS v2.1.1!)
+CONFIANCA_EXECUTAR_DIRETO = 0.92      # Só executa se for MUITO óbvio
+CONFIANCA_CLARIFICACAO = 0.65         # Abaixo disso, pergunta
+CONFIANCA_CONVERSA = 0.40             # Muito baixo = conversa casual
+
+# 📏 LIMITES
+TAMANHO_MINIMO_COMANDO = 15           # Mensagens menores que isso = conversa?
+HISTORICO_MAXIMO_MENSAGENS = 10       # Memória curto prazo por usuário
+TIMEOUT_CONTEXTO_HORAS = 2            # Limpa contexto após X horas
+
+
+# =============================================================================
+# PADRÕES DE DETECÇÃO (EXPANDIDOS v2.1.1)
+# =============================================================================
+
+class PadroesDetectacao:
+    """Padrões regex para detectar intenções e conversas."""
     
-    CRIAR_NOTA = "criar_nota"
-    CRIAR_TAREFA = "criar_tarefa"
-    BUSCAR_INFO = "buscar_info"
-    GERAR_IDEIAS = "gerar_ideias"
-    CONSULTAR_METRICAS = "consultar_metricas"
-    CRIAR_PLANO = "criar_plano"
-    CONVERSAR = "conversar"
-    DESCONHECIDA = "desconhecida"
-
-
-class PrioridadeTarefa(Enum):
-    """Níveis de prioridade para tarefas."""
+    # 🔴 COMANDOS ÓBVIOS (executar direto - alta confiança)
+    COMANDOS_OBVIOS_NOTA = [
+        r"^(anota|nota|escreve|registra|salva)\b.*:",
+        r"\b(anota ai|anota isto|anota isso|bota na lista)\b",
+        r"^criar nota\b",
+        r"^add:\s",
+        r"^\*\*.*\*\*$",  # Markdown bold = título explícito
+    ]
     
-    BAIXA = "baixa"
-    MEDIA = "media"
-    ALTA = "alta"
-    URGENTE = "urgente"
+    COMANDOS_OBVIOS_TAREFA = [
+        r"^(tarefa|task|criar tarefa|nova tarefa)\b.*:",
+        r"\b(lembrar|lembra|nao esquece|não esquece)\b.*(ate|até|amanha|amanhã|semana|quinta|sexta)",
+        r"\b(prazo|deadline|entregar|terminar|finalizar)\b.*(ate|até|amanha|hoje)",
+    ]
+    
+    # 🟢 CONVERSA CASUAL (NÃO são comandos!)
+    CONVERSA_CASUAL = [
+        # Saudações
+        r"^(eai|e ai|ei|oi|olá|ola|hey|hello|hi|salve|fala|opa|oie)\b",
+        r"^(bom dia|boa tarde|boa noite|boa|bom|tarde|noite)\b",
+        
+        # Perguntas gerais
+        r"^(como|qual|onde|quando|por que|porque|quem|o que|q)\b.*(voce|você|ta|está)",
+        r"^(tudo bem|tudo bom|como vai|como esta|como c ta|como você ta)\b",
+        
+        # Respostas curtas
+        r"^(sim|nao|não|ok|blz|beleza|claro|certo|obrigado|valeu|thanks|okk)\s*[!?.]*$",
+        r"^(cancela|cancelar|esquece|ignora|deixa pra lá|deixa pra la)\b",
+        
+        # Expressões casuais
+        r"^(haha|kkk|rsrs|hehe|lol|😂|👍|👎|❤️|🔥|💪|🙏)\s*[!?.]*$",
+        r"^(legal|bacana|maneiro|top|show|daora|dahora|incrivel|maravilhoso)\s*[!?.]*$",
+        r"^(me ajuda|ajuda|socorro|help|duvida|dúvida)\b",
+        
+        # Sobre o assistente
+        r"(voce é|você é|quem é|seu nome|teu nome|como funciona)\b",
+        r"(tudo bem com voce|tudo bem com você|como você está|voce ta bem)\b",
+    ]
+    
+    # 🟡 INDICADORES DE AÇÃO (mas precisam de clarificação)
+    INDICADORES_ACAO = [
+        r"\b(preciso|precisei|tenho que|tenho q|tenho de|gostaria)\b",
+        r"\b(terminar|finalizar|concluir|acabar|fazer|criar|desenvolver)\b",
+        r"\b(comprar|adquirir|arrumar|consertar|organizar)\b",
+        r"\b(lembra|lembrar|lembrete|reminder|nao esqueça|não esqueça)\b",
+    ]
 
 
 @dataclass
-class IntencaoDetectada:
-    """
-    Representa uma intenção detectada na mensagem do usuário.
+class EstadoClarificacao:
+    """Estado quando estamos esperando resposta do usuário."""
+    intencao_original: IntencaoDetectada
+    entidades: Dict[str, Any]
+    tipo_esperado: str  # "sim_nao", "escolha_tarefa_nota", "detalhes"
+    timestamp: datetime = field(default_factory=datetime.now)
+    tentativas: int = 0
     
-    Attributes:
-        tipo: Tipo da intenção detectada
-        confianca: Nível de confiança (0.0 a 1.0)
-        entidades: Dados extraídos da mensagem (prazos, projetos, etc.)
-        texto_original: Mensagem original do usuário
-    """
-    tipo: TipoIntencao
-    confianca: float
-    entidades: dict[str, Any] = field(default_factory=dict)
-    texto_original: str = ""
+    def expirado(self) -> bool:
+        return (datetime.now() - self.timestamp).total_seconds() > (TIMEOUT_CONTEXTO_HORAS * 3600)
 
-
-@dataclass
-class RespostaBrain:
-    """
-    Resposta completa do Brain Middleware.
-    
-    Attributes:
-        sucesso: Se a ação foi executada com sucesso
-        acao_executada: Tipo de ação que foi realizada
-        resposta_ia: Texto de resposta para o usuario
-        detalhes: Detalhes técnicos da execução
-        sugestoes: Sugestões de ações adicionais
-        erro: Mensagem de erro (se houver)
-    """
-    sucesso: bool
-    acao_executada: str
-    resposta_ia: str
-    detalhes: dict[str, Any] = field(default_factory=dict)
-    sugestoes: list[str] = field(default_factory=list)
-    erro: Optional[str] = None
-
-
-# ============================================================================
-# CLASSE PRINCIPAL: BRAIN MIDDLEWARE
-# ============================================================================
 
 class BrainMiddleware:
     """
-    CAMADA INTELIGENTE - O Cérebro do Sistema.
+    Cérebro Inteligente v2.1.1 - IA Assistente Pessoal CONVERSACIONAL.
     
-    Recebe: Mensagem natural do usuário (texto ou transcrição)
-    Processa: GLM5 identifica intenção + extrai dados estruturados
-    Executa: Chama RAG System, LLM Client, Lex Flow, etc.
-    Responde: Confirmação do que foi feito + sugestões
+    Diferença crítica v2.1 vs v2.1.1:
+    - v2.1: Classificador agressivo → transformava TUDO em tarefa ❌
+    - v2.1.1: Conversacional → pergunta, clarifica, conversa ✅
     
-    Example:
-        >>> from engine.brain_middleware import BrainMiddleware
-        >>> brain = BrainMiddleware()
-        >>> resultado = brain.processar("Lex, anota que preciso comprar microfone")
-        >>> print(resultado.resposta_ia)
-        ✅ Nota criada: 'Comprar microfone'
-        
-    Attributes:
-        _inicializado: Se o middleware foi inicializado
-        _llm: Referência ao LLM Client
-        _rag: Referência ao RAG System
-        _lexflow: Referência ao Lex Flow Client
+    Funcionalidades:
+    - Entende português natural (coloquial, erros, gírias)
+    - Pergunta quando não tem certeza (sistema de clarificação)
+    - Mantém contexto de conversação por usuário
+    - Só executa ações após confirmação ou comando óbvio
     """
     
-    # Mapeamento de palavras-chave para cada tipo de intenção
-    CAPACIDADES: dict[TipoIntencao, list[str]] = {
-        TipoIntencao.CRIAR_NOTA: [
-            "anota", "anote", "lembra disso", "nota aí", "registra", 
-            "guarda isso", "salva", "escreve aí", "nota pra mim",
-            "anotado", "registra aí"
-        ],
-        TipoIntencao.CRIAR_TAREFA: [
-            "preciso", "tenho que", "lembra de", "até sexta", "lembre",
-            "tem que", "preciso terminar", "preciso fazer", "vou fazer",
-            "precisa ser feito", "deadline", "prazo", "entregar"
-        ],
-        TipoIntencao.BUSCAR_INFO: [
-            "o que eu escrevi", "o que eu falei", "resuma", "me dê um plano",
-            "quais são", "como estão", "me mostre", "procure", "busque",
-            "encontre", "sobre o que", "já falei sobre", "tenho anotado"
-        ],
-        TipoIntencao.GERAR_IDEIAS: [
-            "ideias para", "sugira", "brainstorm", "dê ideias",
-            "crie ideias", "me dá ideias", "sugestões de", 
-            "o que posso fazer", "conteúdo sobre"
-        ],
-        TipoIntencao.CONSULTAR_METRICAS: [
-            "como estão", "quanto fiz", "minhas métricas", "produtividade",
-            "status do dia", "como foi meu dia", "progresso",
-            "quanto produzi", "rendimento"
-        ],
-        TipoIntencao.CRIAR_PLANO: [
-            "plano para", "estratégia de", "como escalar", "roadmap",
-            "plano de ação", "roteiro para", "passo a passo",
-            "como conseguir", "meta de"
-        ]
-    }
-    
-    # Padrões regex para extração de entidades
-    PADROES_ENTIDADES = {
-        "prazo": r"(?:até|para|até\s+a)\s+(?:a\s+)?(?:(?:esta|essa|proxima?)\s+)?(segunda|terça|quarta|quinta|sexta|sabado|domingo|semana|mes|amanhã|hoje|\d{1,2}/\d{1,2}|\d{1,2}\s*de?\s*\w+)",
-        "prioridade": r"(?:prioridade\s*:?\s*(alta|baixa|media|média|urgente)|urgente|importante|com\s*prioridade)",
-        "projeto": r"(?:projeto|canal|para\s+o\s+|sobre\s+o\s+)(?:['\"]?)([\w\s&]+?)(?:['\"]?(?:\s|$|\.|,|\?))",
-        "quantidade": r"(\d+)\s*(?:ideias?s|itens?|opçõe?s|tarefas?)",
-    }
-    
     def __init__(self):
-        """Inicializa o Brain Middleware com lazy loading dos componentes."""
-        self._inicializado: bool = False
-        self._llm = None
-        self._rag = None
-        self._lexflow = None
-        self._engine = None
+        self._llm: Optional["LLMClient"] = None
+        self._rag: Optional["RAGSystem"] = None
+        self._lexflow: Optional["LexFlowClient"] = None
+        self._executor: Optional["ExecutorAcoes"] = None
         
-        logger_brain.info("🧠 BrainMiddleware instanciado (aguardando inicialização)")
+        # 🧠 Contextos de conversação por usuário
+        self._contextos_usuarios: Dict[int, ContextoConversa] = {}
+        self._clarificacoes_pendentes: Dict[int, EstadoClarificacao] = {}
+        
+        self._inicializado = False
+        logger_brain.info("🧠 [v2.1.1] BrainMiddleware instanciado (modo CONVERSACIONAL)")
     
-    def inicializar(self) -> bool:
-        """
-        Inicializa o middleware carregando as dependências do CoreEngine.
-        
-        Returns:
-            True se inicializado com sucesso, False caso contrário
-        """
+    def inicializar(self, llm_client=None, rag_system=None, lexflow_client=None) -> bool:
+        """Inicializa o cérebro com as dependências."""
         try:
-            # Importação tardia para evitar circular imports
-            from engine.core_engine import CoreEngine
+            self._llm = llm_client
+            self._rag = rag_system
+            self._lexflow = lexflow_client
             
-            logger_brain.info("🔄 Inicializando Brain Middleware...")
-            
-            # Obtém instância Singleton do Engine
-            self._engine = CoreEngine.obter_instancia()
-            
-            # Carrega componentes via lazy loading
-            self._llm = self._engine.llm_client
-            self._rag = self._engine.sistema_rag
-            self._lexflow = self._engine.lexflow
+            # Inicializar executor de ações
+            if all([self._lexflow, self._llm, self._rag]):
+                from engine.brain_acoes import ExecutorAcoes
+                self._executor = ExecutorAcoes(self._lexflow, self._llm, self._rag)
+                logger_brain.info("✅ [v2.1.1] ExecutorAcoes inicializado")
             
             self._inicializado = True
-            
-            logger_brain.info("✅ Brain Middleware inicializado com sucesso!")
-            logger_brain.info(f"   🤖 LLM: {type(self._llm).__name__}")
-            logger_brain.info(f"   🔍 RAG: {type(self._rag).__name__}")
-            logger_brain.info(f"   🌐 LexFlow: {type(self._lexflow).__name__}")
-            
+            logger_brain.info(f"✅ [v2.1.1] BrainMiddleware PRONTO! (modo conversacional ativo)")
             return True
             
         except Exception as e:
-            logger_brain.error(f"❌ Erro ao inicializar Brain Middleware: {e}")
-            self._inicializado = False
+            logger_brain.error(f"❌ [v2.1.1] Erro na inicialização: {e}", exc_info=True)
             return False
     
-    def _garantir_inicializacao(self) -> bool:
-        """
-        Garante que o middleware está inicializado.
-        
-        Returns:
-            True se inicializado ou se conseguiu inicializar
-        """
-        if not self._inicializado:
-            return self.inicializar()
-        return True
-    
     # =========================================================================
-    # MÉTODO PRINCIPAL: PROCESSAR MENSAGEM
+    # MÉTODO PRINCIPAL - PROCESSAR MENSAGEM
     # =========================================================================
     
-    def processar(self, mensagem: str, contexto: Optional[dict] = None) -> RespostaBrain:
+    def processar(self, mensagem: str, contexto: Optional[Dict[str, Any]] = None) -> RespostaBrain:
         """
-        Processa mensagem natural e retorna ação executada.
+        Processa mensagem do usuário com INTELIGÊNCIA CONVERSACIONAL.
         
-        Este é o método principal do Brain Middleware. Recebe uma mensagem
-        em linguagem natural, detecta a intenção, extrai entidades e
-        executa a ação apropriada.
-        
-        Args:
-            mensagem: Texto da mensagem do usuário
-            contexto: Informações adicionais opcionais (chat_id, user_id, etc.)
-        
-        Returns:
-            RespostaBrain com resultado da processamento
-        
-        Example:
-            >>> brain = BrainMiddleware()
-            >>> brain.inicializar()
-            >>> resultado = brain.processar("Lex, anota que preciso comprar microfone")
-            >>> print(resultado.resposta_ia)
-            ✅ Nota criada: 'Comprar microfone Blue Yeti para Canal Dark'
+        Fluxo v2.1.1:
+        1. Verificar se há clarificação pendente (usuário respondendo pergunta)
+        2. Normalizar texto (corrigir erros, gírias)
+        3. Detectar se é CONVERSA CASUAL vs COMANDO
+        4. Se comando: detectar intenção e avaliar confiança
+        5. Se confiança alta E comando óbvio → EXECUTAR
+        6. Se confiança média → CLARIFICAR (perguntar!)
+        7. Se confiança baixa ou conversa → CONVERSAR/DESCONHECIDO
         """
+        usuario_id = contexto.get("usuario_id") if contexto else None
         
-        logger_brain.info("=" * 60)
-        logger_brain.info("🧠 NOVA MENSAGEM RECEBIDA PARA PROCESSAMENTO")
-        logger_brain.info(f"💬 Mensagem: '{mensagem[:100]}{'...' if len(mensagem) > 100 else ''}'")
-        
-        # Garante inicialização
-        if not self._garantir_inicializacao():
-            return RespostaBrain(
-                sucesso=False,
-                acao_executada="erro_inicializacao",
-                resposta_ia="❌ Desculpe, estou tendo problemas para me conectar aos meus sistemas. Tente novamente em instantes.",
-                erro="Falha na inicialização do Brain Middleware"
-            )
+        logger_brain.info(f"🧠 [v2.1.1] NOVA MENSAGEM: '{mensagem[:60]}...' (user: {usuario_id})")
         
         try:
-            # Passo 1: Detectar intenção
-            intencao = self._detectar_intencao(mensagem)
-            logger_brain.info(f"🎯 Intenção detectada: {intencao.tipo.value} (confiança: {intencao.confianca:.2f})")
+            # 1️⃣ VERIFICAR CLARIFICAÇÃO PENDENTE
+            if usuario_id and usuario_id in self._clarificacoes_pendentes:
+                resultado = self._processar_resposta_clarificacao(mensagem, usuario_id)
+                if resultado:
+                    return resultado
             
-            # Passo 2: Executar ação baseada na intenção
-            resultado = self._executar_acao(intencao, mensagem, contexto)
+            # 2️⃣ NORMALIZAR TEXTO
+            msg_normalizada = normalizar_texto(mensagem)
+            logger_brain.info(f"📝 Normalizado: '{msg_normalizada[:50]}...'")
             
-            logger_brain.info(f"✅ Processamento concluído: {resultado.sucesso}")
-            logger_brain.info("=" * 60)
+            # 3️⃣ DETECTAR SE É CONVERSA CASUAL
+            if self._eh_conversa_casual(mensagem, msg_normalizada):
+                logger_brain.info("💬 Detectado: CONVERSA CASUAL")
+                return self._gerar_resposta_conversacional(mensagem, msg_normalizada, usuario_id)
             
-            return resultado
+            # 4️⃣ DETECTAR INTENÇÃO
+            intencao = self._detectar_intencao_inteligente(mensagem, msg_normalizada)
+            logger_brain.info(f"🎯 Intenção: {intencao.tipo.value} ({intencao.confianca:.2f})")
+            
+            # 5️⃣ DECIDIR AÇÃO BASEADA NA CONFIANÇA
+            return self._decisao_inteligente(intencao, mensagem, usuario_id)
             
         except Exception as e:
-            logger_brain.error(f"❌ Erro inesperado no processamento: {e}", exc_info=True)
-            
+            logger_brain.error(f"❌ [v2.1.1] Erro no processamento: {e}", exc_info=True)
             return RespostaBrain(
                 sucesso=False,
                 acao_executada="erro",
-                resposta_ia="❌ Ops! Algo deu errado ao processar sua mensagem. Pode tentar de outra forma?",
+                resposta_ia=f"❌ Ops! Deu um problema aqui: {str(e)[:50]} 😅",
                 erro=str(e)
             )
     
     # =========================================================================
-    # DETECÇÃO DE INTENÇÃO
+    # SISTEMA DE CLARIFICAÇÃO (NOVO v2.1.1!)
     # =========================================================================
     
-    def _detectar_intencao(self, mensagem: str) -> IntencaoDetectada:
+    def _processar_resposta_clarificacao(self, mensagem: str, usuario_id: int) -> Optional[RespostaBrain]:
         """
-        Detecta a intenção da mensagem usando análise híbrida.
+        Processa resposta do usuário a uma pergunta de clarificação.
         
-        Usa combinação de:
-        1. Matching de palavras-chave (rápido, determinístico)
-        2. Análise via LLM (mais preciso, para casos complexos)
-        
-        Args:
-            mensagem: Texto da mensagem do usuário
-        
-        Returns:
-            IntencaoDetectada com tipo e confiança
+        Exemplo:
+        Bot: "Quer criar TAREFA ou NOTA?"
+        User: "tarefa" → Executar criar_tarefa
+        User: "nota" → Executar criar_nota
+        User: "cancela" → Cancelar operação
         """
-        mensagem_lower = mensagem.lower().strip()
+        estado = self._clarificacoes_pendentes.get(usuario_id)
         
-        # Passo 1: Tentar detecção por palavras-chave (rápido)
-        intencao_keyword = self._detectar_por_keywords(mensagem_lower)
+        if not estado or estado.expirado():
+            if estado and estado.expirado():
+                del self._clarificacoes_pendentes[usuario_id]
+                logger_brain.info(f"⏰ Clarificação expirada para user {usuario_id}")
+            return None
         
-        if intencao_keyword and intencao_keyword.confianca >= 0.8:
-            # Alta confiança no keyword matching, extrair entidades
-            entidades = self._extrair_entidades(mensagem)
-            return IntencaoDetectada(
-                tipo=intencao_keyword.tipo,
-                confianca=intencao_keyword.confianca,
-                entidades=entidades,
-                texto_original=mensagem
+        estado.tentativas += 1
+        msg_lower = mensagem.lower().strip()
+        
+        logger_brain.info(f"💬 Usuário respondendo clarificação: '{mensagem}' (tentativa {estado.tentativas})")
+        
+        # === RESPOSTAS DE CANCELAMENTO ===
+        if any(x in msg_lower for x in ["cancela", "cancelar", "esquece", "ignora", "deixa", "não", "nao", "não quero", "nao quero"]):
+            del self._clarificacoes_pendentes[usuario_id]
+            return RespostaBrain(
+                sucesso=True,
+                acao_executada="cancelado",
+                resposta_ia="👍 *Beleza, cancelado!* Se precisar de algo, é só chamar! 😊"
             )
         
-        # Passo 2: Usar LLM para detecção mais precisa
-        try:
-            intencao_llm = self._detectar_por_llm(mensagem)
-            if intencao_llm:
-                return intencao_llm
-        except Exception as e:
-            logger_brain.warning(f"⚠️ Falha na detecção via LLM: {e}")
+        # === RESPOSTAS POR TIPO DE CLARIFICAÇÃO ===
         
-        # Fallback: retornar keyword match ou desconhecida
-        if intencao_keyword:
-            entidades = self._extrair_entidades(mensagem)
-            return IntencaoDetectada(
-                tipo=intencao_keyword.tipo,
-                confianca=intencao_keyword.confianca,
-                entidades=entidades,
-                texto_original=mensagem
+        if estado.tipo_esperado == "escolha_tarefa_nota":
+            return self._processar_escolha_tarefa_nota(mensagem, msg_lower, estado, usuario_id)
+        
+        elif estado.tipo_esperado == "sim_nao":
+            return self._processar_resposta_sim_nao(mensagem, msg_lower, estado, usuario_id)
+        
+        elif estado.tipo_esperado == "detalhes":
+            return self._processar_detalhes_adicionais(mensagem, estado, usuario_id)
+        
+        # === TENTATIVAS ESGOTADAS ===
+        if estado.tentativas >= 3:
+            del self._clarificacoes_pendentes[usuario_id]
+            return RespostaBrain(
+                sucesso=True,
+                acao_executada="clarificacao_expirada",
+                resposta_ia="😅 *Não entendi...* Vamos recomeçar! O que você precisa? (pode escrever de outra forma)"
             )
         
-        return IntencaoDetectada(
-            tipo=TipoIntencao.DESCONHECIDA,
-            confianca=0.0,
-            entidades={},
-            texto_original=mensagem
+        # === NÃO ENTENDEU A RESPOSTA ===
+        return RespostaBrain(
+            sucesso=True,
+            acao_executada="clarificacao_repetir",
+            resposta_ia=f"""🤔 *Hmm, não entendi totalmente...*
+
+Você disse: "{mensagem}"
+
+💡 *Opções:*
+• `tarefa` → Criar tarefa com lembrete
+• `nota` → Apenas anotar
+• `cancela` → Desistir
+
+Ou descreva melhor o que quer! 😊"""
         )
     
-    def _detectar_por_keywords(self, mensagem_lower: str) -> Optional[IntencaoDetectada]:
-        """
-        Detecta intenção baseada em palavras-chave.
+    def _processar_escolha_tarefa_nota(self, mensagem, msg_lower, estado, usuario_id) -> RespostaBrain:
+        """Processa escolha entre tarefa e nota."""
         
-        Args:
-            mensagem_lower: Mensagem em minúsculas
-        
-        Returns:
-            IntencaoDetectada ou None se não encontrou match
-        """
-        melhor_match: Optional[TipoIntencao] = None
-        melhor_score = 0.0
-        total_matches = 0
-        
-        for tipo_intencao, keywords in self.CAPACIDADES.items():
-            score = 0
-            for keyword in keywords:
-                if keyword in mensagem_lower:
-                    score += len(keyword) / len(mensagem_lower) * 2
-                    score += 0.5  # Bônus por match
+        # Escolheu TAREFA
+        if any(x in msg_lower for x in ["tarefa", "task", "lembrete", "reminder", "lembrar", "alerta"]):
+            del self._clarificacoes_pendentes[usuario_id]
             
-            if score > melhor_score:
-                melhor_score = score
-                melhor_match = tipo_intencao
-            if score > 0:
-                total_matches += 1
-        
-        if melhor_match and melhor_score > 0:
-            # Normalizar confiança entre 0.3 e 0.95
-            confianca = min(0.95, max(0.3, melhor_score))
+            # Modificar intenção original para tarefa
+            estado.intencao_original.tipo = TipoIntencao.CRIAR_TAREFA
             
-            return IntencaoDetectada(
-                tipo=melhor_match,
-                confianca=confianca
+            logger_brain.info(f"✅ Usuário escolheu TAREFA")
+            
+            # Executar com o executor
+            if self._executor:
+                return self._executor.executar(estado.intencao_original, mensagem, {"usuario_id": usuario_id})
+        
+        # Escolheu NOTA
+        elif any(x in msg_lower for x in ["nota", "note", "anotar", "anota", "apenas anotar", "so anota", "só anota"]):
+            del self._clarificacoes_pendentes[usuario_id]
+            
+            # Modificar intenção original para nota
+            estado.intencao_original.tipo = TipoIntencao.CRIAR_NOTA
+            
+            logger_brain.info(f"✅ Usuário escolheu NOTA")
+            
+            if self._executor:
+                return self._executor.executar(estado.intencao_original, mensagem, {"usuario_id": usuario_id})
+        
+        # Forneceu detalhes adicionais (prazo, prioridade, etc.)
+        elif any(x in msg_lower for x in ["urgente", "alta", "baixa", "media", "média", "prioridade", 
+                                           "hoje", "amanha", "amanhã", "semana", "quinta", "sexta",
+                                           "manhã", "tarde", "noite"]):
+            # Adicionar detalhes às entidades
+            estado.entidades["detalhes_extra"] = mensagem
+            estado.tipo_esperado = "confirmar_execucao"
+            
+            logger_brain.info(f"📝 Usuário adicionou detalhes: {mensagem}")
+            
+            return RespostaBrain(
+                sucesso=True,
+                acao_executada="clarificacao_detalhes",
+                resposta_ia=f"""👍 *Entendi!*
+
+📋 **Detalhes:** {mensagem}
+
+⚡ *Vou criar a TAREFA com esses detalhes.*
+
+✅ Confirmar? (responda `sim` ou `cancela`)""",
+                aguardando_resposta=True
             )
         
-        return None
+        # Não reconheceu
+        return None  # Cairá no padrão "não entendi"
     
-    def _detectar_por_llm(self, mensagem: str) -> Optional[IntencaoDetectada]:
-        """
-        Detecta intenção usando LLM para análise semântica.
+    def _processar_resposta_sim_nao(self, mensagem, msg_lower, estado, usuario_id) -> RespostaBrain:
+        """Processa resposta sim/não."""
         
-        Args:
-            mensagem: Mensagem original do usuário
-        
-        Returns:
-            IntencaoDetectada ou None se falhou
-        """
-        if not self._llm:
-            return None
-        
-        prompt_intencao = f"""Analise a seguinte mensagem e identifique a intenção do usuário.
-
-MENSAGEM: "{mensagem}"
-
-INTENÇÕES POSSÍVEIS:
-- criar_nota: Usuário quer salvar/anotar algo
-- criar_tarefa: Usuário tem algo a fazer com prazo
-- buscar_info: Usuário quer encontrar informações existentes
-- gerar_ideias: Usuário quer sugestões/ideias
-- consultar_metricas: Usuário quer saber seu progresso/status
-- criar_plano: Usuário quer um plano ou estratégia
-- conversar: É apenas uma conversa casual ou pergunta geral
-
-RESPONDA APENAS EM FORMATO JSON:
-{{"intencao": "tipo_de_intencao", "confianca": 0.0-1.0, "entidades": {{}}}}
-
-Exemplo: {{"intencao": "criar_nota", "confianca": 0.9, "entidades": {{"texto": "comprar microfone"}}}}"""
-
-        try:
-            resposta = self._llm.gerar(prompt_intencao)
+        if any(x in msg_lower for x in ["sim", "yes", "y", "ok", "blz", "claro", "certo", "confirmar", "pode", "vai"]):
+            del self._clarificacoes_pendentes[usuario_id]
+            logger_brain.info(f"✅ Usuário CONFIRMOU execução")
             
-            # Extrair JSON da resposta
-            json_match = re.search(r'\{[^{}]+\}', resposta)
-            if json_match:
-                import json
-                dados = json.loads(json_match.group())
-                
-                tipo_str = dados.get("intencao", "desconhecida")
-                try:
-                    tipo = TipoIntencao(tipo_str)
-                except ValueError:
-                    tipo = TipoIntencao.DESCONHECIDA
-                
-                return IntencaoDetectada(
-                    tipo=tipo,
-                    confianca=float(dados.get("confianca", 0.5)),
-                    entidades=dados.get("entidades", {}),
-                    texto_original=mensagem
-                )
-                
-        except Exception as e:
-            logger_brain.warning(f"⚠️ Erro ao parsear resposta do LLM: {e}")
+            if self._executor:
+                return self._executor.executar(estado.intencao_original, mensagem, {"usuario_id": usuario_id})
         
-        return None
+        else:
+            del self._clarificacoes_pendentes[usuario_id]
+            return RespostaBrain(
+                sucesso=True,
+                acao_executada="cancelado_usuario",
+                resposta_ia="👍 *Beleja, não vou fazer nada então!* Se mudar de ideia, é só falar! 😊"
+            )
     
-    def _extrair_entidades(self, mensagem: str) -> dict[str, Any]:
-        """
-        Extrai entidades relevantes da mensagem usando regex.
+    def _processar_detalhes_adicionais(self, mensagem, estado, usuario_id) -> RespostaBrain:
+        """Processa detalhes adicionais fornecidos pelo usuário."""
+        estado.entidades["detalhes_extra"] = mensagem
+        del self._clarificacoes_pendentes[usuario_id]
         
-        Extrai: prazos, prioridades, projetos, quantidades
+        # Atualizar intenção original com detalhes
+        conteudo_original = estado.entidades.get("conteudo", "")
+        estado.entidades["conteudo"] = f"{conteudo_original}\n\n{mensagem}"
         
-        Args:
-            mensagem: Mensagem original do usuário
+        logger_brain.info(f"📝 Detalhes adicionados, executando...")
         
-        Returns:
-            Dicionário com entidades encontradas
-        """
-        entidades: dict[str, Any] = {}
-        mensagem_lower = mensagem.lower()
-        
-        # Extrair prazo
-        prazo_match = re.search(self.PADROES_ENTIDADES["prazo"], mensagem_lower)
-        if prazo_match:
-            entidades["prazo"] = self._converter_prazo(prazo_match.group(1))
-        
-        # Extrair prioridade
-        prio_match = re.search(self.PADROES_ENTIDADES["prioridade"], mensagem_lower)
-        if prio_match:
-            prio_str = prio_match.group(1).lower()
-            if prio_str in ["urgente"]:
-                entidades["prioridade"] = PrioridadeTarefa.URGENTE.value
-            elif prio_str in ["alta", "importante"]:
-                entidades["prioridade"] = PrioridadeTarefa.ALTA.value
-            elif prio_str in ["media", "média"]:
-                entidades["prioridade"] = PrioridadeTarefa.MEDIA.value
-            else:
-                entidades["prioridade"] = PrioridadeTarefa.BAIXA.value
-        
-        # Extrair quantidade
-        qtd_match = re.search(self.PADROES_ENTIDADES["quantidade"], mensagem_lower)
-        if qtd_match:
-            entidades["quantidade"] = int(qtd_match.group(1))
-        
-        # Limpar mensagem para extrair conteúdo principal
-        conteudo = self._limpar_mensagem_para_conteudo(mensagem)
-        if conteudo:
-            entidades["conteudo"] = conteudo
-        
-        # Tentar identificar projeto mencionado
-        projeto_match = re.search(self.PADROES_ENTIDADES["projeto"], mensagem_lower, re.IGNORECASE)
-        if projeto_match:
-            entidades["projeto_sugerido"] = projeto_match.group(1).strip()
-        
-        # Detectar menção a canais/projetos conhecidos
-        if any(p in mensagem_lower for p in ["canal dark", "dark", "youtube", "yt"]):
-            entidades["projeto_sugerido"] = "Canais Dark"
-        elif any(p in mensagem_lower for p in ["instagram", "ig", "influencer"]):
-            entidades["projeto_sugerido"] = "Influencer AI"
-        
-        logger_brain.debug(f"🔍 Entidades extraídas: {entidades}")
-        
-        return entidades
+        if self._executor:
+            return self._executor.executar(estado.intencao_original, mensagem, {"usuario_id": usuario_id})
     
-    def _limpar_mensagem_para_conteudo(self, mensagem: str) -> str:
+    def _solicitar_clarificacao(self, intencao: IntencaoDetectada, mensagem: str, usuario_id: int) -> RespostaBrain:
         """
-        Remove prefixos e ruído da mensagem para extrair o conteúdo real.
+        Gera pergunta de clarificação para o usuário.
         
-        Args:
-            mensagem: Mensagem original
-        
-        Returns:
-            Conteúdo limpo
+        Esta é a FUNÇÃO CHAVE que faz o bot ser CONVERSACIONAL!
         """
-        # Remover prefixos comuns
-        prefixos = [
-            r"^lex[,:\s]*",
-            r"^ei[,:\s]*",
-            r"^olá[,:\s]*",
-            r"^oi[,:\s]*",
-            r"^anota\s+(?:aí\s+)?(?:que\s+)?",
-            r"^lembra?\s+(?:de\s+|que\s+)?(?:que\s+)?",
-            r"^anote\s+(?:aí\s+)?(?:que\s+)?",
-            r"^registra?\s+(?:aí\s+)?(?:que\s+)?",
-            r"^preciso\s+(?:comprar|fazer|terminar|criar|escrever)\s+",
-            r"^tenho\s+que\s+",
-            r"^vou\s+",
-        ]
+        conteudo = intencao.entidades.get("conteudo", mensagem)
+        conteudo_curto = conteudo[:60] + ("..." if len(conteudo) > 60 else "")
         
-        conteudo = mensagem.strip()
-        for prefixo in prefixos:
-            conteudo = re.sub(prefixo, "", conteudo, flags=re.IGNORECASE).strip()
+        # Determinar tipo de pergunta baseado na intenção
+        if intencao.tipo == TipoIntencao.CRIAR_TAREFA:
+            tipo_pergunta = "escolha_tarefa_nota"
+            resposta = f"""🤔 *Deixa eu ver se entendi...*
+
+Você quer registrar: **{conteudo_curto}**
+
+📋 *Quer criar uma TAREFA* (com lembrete/prazo)?
+📝 *Ou é apenas uma NOTA* simples?
+
+💡 *Responda:*
+• `tarefa` → Vou criar tarefa
+• `nota` → Só vou anotar
+• Ou me dê mais detalhes (ex: "pra sexta", "urgente")"""
         
-        # Remover pontuação final excessiva
-        conteudo = conteudo.rstrip("!?. ")
+        elif intencao.tipo == TipoIntencao.CRIAR_NOTA:
+            tipo_pergunta = "confirmar_anotacao"
+            resposta = f"""📝 *Vou anotar isso:*
+
+**{conteudo_curto}**
+
+✅ *Confirmar?* (`sim` / `cancela`)
+💡 Quer adicionar mais alguma informação?"""
         
-        return conteudo if len(conteudo) > 2 else ""
-    
-    def _converter_prazo(self, prazo_str: str) -> str:
-        """
-        Converte string de prazo para formato padronizado.
+        else:
+            tipo_pergunta = "geral"
+            resposta = f"""🤔 *Tenho quase certeza que você quer...*
+
+{intencao.tipo.value.replace('_', ' ').title()}: **{conteudo_curto}**
+
+✅ *Isso mesmo?* (`sim` / `nao` / `cancela`)"""
         
-        Args:
-            prazo_str: String do prazo extraída (ex: "sexta", "amanhã")
+        # Salvar estado de clarificação
+        self._clarificacoes_pendentes[usuario_id] = EstadoClarificacao(
+            intencao_original=intencao,
+            entidades=intencao.entidades.copy(),
+            tipo_esperado=tipo_pergunta
+        )
         
-        Returns:
-            Data formatada ou string legível
-        """
-        hoje = datetime.now()
-        prazo_str = prazo_str.lower().strip()
+        logger_brain.info(f"🤔 Clarificação solicitada (tipo: {tipo_pergunta})")
         
-        mapeamento_dias = {
-            "hoje": hoje,
-            "amanhã": hoje + timedelta(days=1),
-            "segunda": self._proximo_dia_semana(hoje, 0),
-            "terça": self._proximo_dia_semana(hoje, 1),
-            "quarta": self._proximo_dia_semana(hoje, 2),
-            "quinta": self._proximo_dia_semana(hoje, 3),
-            "sexta": self._proximo_dia_semana(hoje, 4),
-            "sabado": self._proximo_dia_semana(hoje, 5),
-            "domingo": self._proximo_dia_semana(hoje, 6),
-        }
-        
-        if prazo_str in mapeamento_dias:
-            data = mapeamento_dias[prazo_str]
-            return data.strftime("%Y-%m-%d")
-        
-        if prazo_str == "semana":
-            return (hoje + timedelta(days=7)).strftime("%Y-%m-%d")
-        
-        if prazo_str == "mes":
-            return (hoje + timedelta(days=30)).strftime("%Y-%m-%d")
-        
-        return prazo_str  # Retorna original se não reconheceu
-    
-    @staticmethod
-    def _proximo_dia_semana(data_base: datetime, dia_semana: int) -> datetime:
-        """
-        Calcula a próxima ocorrência de um dia da semana.
-        
-        Args:
-            data_base: Data de referência
-            dia_semana: 0=Segunda, 1=Terça, ..., 6=Domingo
-        
-        Returns:
-            Data do próximo dia especificado
-        """
-        dias_ate = (dia_semana - data_base.weekday()) % 7
-        if dias_ate == 0:
-            dias_ate = 7  # Próxima semana, não hoje
-        return data_base + timedelta(days=dias_ate)
+        return RespostaBrain(
+            sucesso=True,
+            acao_executada="clarificacao",
+            resposta_ia=resposta,
+            aguardando_resposta=True,
+            clarificacao_pendente=True
+        )
     
     # =========================================================================
-    # EXECUÇÃO DE AÇÕES
+    # DETECÇÃO DE INTENÇÕES (MELHORADA v2.1.1)
     # =========================================================================
     
-    def _executar_acao(
-        self, 
-        intencao: IntencaoDetectada, 
-        mensagem: str, 
-        contexto: Optional[dict]
-    ) -> RespostaBrain:
+    def _detectar_intencao_inteligente(self, mensagem: str, msg_norm: str) -> IntencaoDetectada:
         """
-        Executa a ação apropriada baseada na intenção detectada.
+        Detecta intenção de forma INTELIGENTE (não agressiva).
         
-        Args:
-            intencao: Intenção detectada
-            mensagem: Mensagem original
-            contexto: Contexto adicional
-        
-        Returns:
-            RespostaBrain com resultado da execução
+        v2.1.1: Usa múltiplos sinais, não só keywords!
         """
-        # Dispatcher de ações
-        acoes: dict[TipoIntencao, callable] = {
-            TipoIntencao.CRIAR_NOTA: self._acao_criar_nota,
-            TipoIntencao.CRIAR_TAREFA: self._acao_criar_tarefa,
-            TipoIntencao.BUSCAR_INFO: self._acao_buscar_info,
-            TipoIntencao.GERAR_IDEIAS: self._acao_gerar_ideias,
-            TipoIntencao.CONSULTAR_METRICAS: self._acao_consultar_metricas,
-            TipoIntencao.CRIAR_PLANO: self._acao_criar_plano,
-            TipoIntencao.CONVERSAR: self._acao_conversar,
-            TipoIntencao.DESCONHECIDA: self._acao_desconhecida,
+        msg_lower = mensagem.lower()
+        msg_norm_lower = msg_norm.lower()
+        
+        # Extrair entidades primeiro
+        entidades = extrair_entidades(mensagem)
+        
+        # Pontuação por tipo de intenção
+        scores = {
+            TipoIntencao.CRIAR_TAREFA: 0.0,
+            TipoIntencao.CRIAR_NOTA: 0.0,
+            TipoIntencao.BUSCAR_INFO: 0.0,
+            TipoIntencao.GERAR_IDEIAS: 0.0,
+            TipoIntencao.CONSULTAR_METRICAS: 0.0,
+            TipoIntencao.CRIAR_PLANO: 0.0,
+            TipoIntencao.CONVERSAR: 0.0,
+            TipoIntencao.DESCONHECIDA: 0.0,
         }
         
-        executor = acoes.get(intencao.tipo, self._acao_desconhecida)
+        # === VERIFICAR COMANDOS ÓBVIOS (PONTUAÇÃO ALTA) ===
         
-        try:
-            return executor(intencao, mensagem, contexto)
-        except Exception as e:
-            logger_brain.error(f"❌ Erro na ação {intencao.tipo.value}: {e}", exc_info=True)
-            return RespostaBrain(
-                sucesso=False,
-                acao_executada=intencao.tipo.value,
-                resposta_ia=f"❌ Desculpe, tive um problema ao executar essa ação. Erro: {str(e)[:50]}",
-                erro=str(e)
-            )
-    
-    # -----------------------------------------------------------------
-    # AÇÃO: CRIAR NOTA
-    # -----------------------------------------------------------------
-    
-    def _acao_criar_nota(
-        self, 
-        intencao: IntencaoDetectada, 
-        mensagem: str, 
-        contexto: Optional[dict]
-    ) -> RespostaBrain:
-        """
-        Cria uma nota no Lex Flow baseada na mensagem.
+        # Comandos óbvios de NOTA
+        for padrao in PadroesDetectacao.COMANDOS_OBVIOS_NOTA:
+            if re.search(padrao, msg_lower, re.I):
+                scores[TipoIntencao.CRIAR_NOTA] += 0.6
         
-        Args:
-            intencao: Intenção com entidades extraídas
-            mensagem: Mensagem original
-            contexto: Contexto adicional
+        # Comandos óbvios de TAREFA (com prazo explícito!)
+        for padrao in PadroesDetectacao.COMANDOS_OBVIOS_TAREFA:
+            if re.search(padrao, msg_lower, re.I):
+                scores[TipoIntencao.CRIAR_TAREFA] += 0.7
         
-        Returns:
-            RespostaBrain confirmando a criação da nota
-        """
-        logger_brain.info("📝 Executando: CRIAR NOTA")
+        # === VERIFICAR INDICADORES DE AÇÃO (PONTUAÇÃO MÉDIA) ===
         
-        # Extrair título e conteúdo
-        conteudo = intencao.entidades.get("conteudo", mensagem)
+        indicadores_encontrados = []
+        for padrao in PadroesDetectacao.INDICADORES_ACAO:
+            if re.search(padrao, msg_lower, re.I):
+                indicadores_encontrados.append(padrao)
         
-        # Gerar título curto (primeiros 50 chars)
-        titulo = conteudo[:50] + ("..." if len(conteudo) > 50 else "")
+        if indicadores_encontrados:
+            # Tem indicadores de ação, mas NÃO é comando óbvio
+            # → Pontuação média (vai cair na clarificação!)
+            score_base = 0.4 + (len(indicadores_encontrados) * 0.05)
+            scores[TipoIntencao.CRIAR_TAREFA] = max(scores[TipoIntencao.CRIAR_TAREFA], score_base)
+            scores[TipoIntencao.CRIAR_NOTA] = max(scores[TipoIntencao.CRIAR_NOTA], score_base * 0.9)
         
-        # Adicionar contexto automático
-        timestamp = datetime.now().strftime("%d/%m/%Y %H:%H")
-        conteudo_completo = f"[Captura via Brain Middleware - {timestamp}]\n\n{conteudo}"
+        # === DETECTAR OUTRAS INTENÇÕES ESPECÍFICAS ===
         
-        # Adicionar projeto se identificado
-        if "projeto_sugerido" in intencao.entidades:
-            conteudo_completo += f"\n\n📁 Projeto relacionado: {intencao.entidades['projeto_sugerido']}"
+        # Buscar info
+        if any(x in msg_lower for x in ["o que eu", "já escrevi", "falei sobre", "procuro por", 
+                                         "buscando", "procurando", "tem algo sobre", "lembra sobre"]):
+            scores[TipoIntencao.BUSCAR_INFO] += 0.7
         
-        try:
-            # Chamar Lex Flow API
-            resultado = self._lexflow.add_note(titulo, content=conteudo_completo)
-            
-            if resultado.get("success"):
-                nota_id = resultado.get("note", {}).get("id", "N/A")
-                
-                logger_brain.info(f"✅ Nota criada com ID: {nota_id}")
-                
-                resposta = f"""✅ **Nota criada com sucesso!**
-
-📝 *{titulo}*
-
-💾 Salvo no Lex Flow às {timestamp}
-"""
-                
-                if "projeto_sugerido" in intencao.entidades:
-                    resposta += f"📁 Vinculado ao projeto: {intencao.entidades['projeto_sugerido']}\n"
-                
-                return RespostaBrain(
-                    sucesso=True,
-                    acao_executada="criar_nota",
-                    resposta_ia=resposta,
-                    detalhes={"nota_id": nota_id, "titulo": titulo},
-                    sugestoes=[
-                        "Quer que eu crie uma tarefa para isso?",
-                        "Quer adicionar mais detalhes à nota?"
-                    ]
-                )
-            else:
-                raise Exception(resultado.get("error", "Erro desconhecido do Lex Flow"))
-                
-        except Exception as e:
-            logger_brain.error(f"❌ Erro ao criar nota: {e}")
-            return RespostaBrain(
-                sucesso=False,
-                acao_executada="criar_nota",
-                resposta_ia=f"❌ Não consegui criar a nota. Erro: {str(e)[:50]}",
-                erro=str(e)
-            )
-    
-    # -----------------------------------------------------------------
-    # AÇÃO: CRIAR TAREFA (v2.0 - Inbox vs Projeto)
-    # -----------------------------------------------------------------
-    
-    def _acao_criar_tarefa(
-        self, 
-        intencao: IntencaoDetectada, 
-        mensagem: str, 
-        contexto: Optional[dict]
-    ) -> RespostaBrain:
-        """
-        Cria uma tarefa no Lex Flow baseada na mensagem.
+        # Gerar ideias
+        if any(x in msg_lower for x in ["ideias", "idéias", "ideia para", "sugestões", "sugestoes",
+                                         "criativo", "inspiração", "inspiracao", "conteúdo", "conteudo"]):
+            scores[TipoIntencao.GERAR_IDEIAS] += 0.7
         
-        LÓGICA INTELIGENTE:
-        - Tem projeto específico? → add_task() no projeto
-        - Sem projeto?           → add_note() na CAIXA DE ENTRADA (Inbox)
+        # Métricas/status
+        if any(x in msg_lower for x in ["métricas", "metricas", "status", "relatório", "relatorio",
+                                         "como estão", "como estao", "resumo", "painel"]):
+            scores[TipoIntencao.CONSULTAR_METRICAS] += 0.7
         
-        Args:
-            intencao: Intenção com entidades extraídas
-            mensagem: Mensagem original
-            contexto: Contexto adicional
+        # Plano/estratégia
+        if any(x in msg_lower for x in ["plano", "planejar", "estratégia", "estrategia",
+                                         "roteiro", "projeto para", "meta para"]):
+            scores[TipoIntencao.CRIAR_PLANO] += 0.7
         
-        Returns:
-            RespostaBrain confirmando a criação da tarefa
-        """
-        logger_brain.info("✅ Executando: CRIAR TAREFA")
+        # === AJUSTE FINAL: VERIFICAR SE É REALMENTE AÇÃO OU SÓ CONVERSÃO ===
         
-        # Extrair dados da tarefa
-        conteudo = intencao.entidades.get("conteudo", mensagem)
-        titulo = conteudo[:80] + ("..." if len(conteudo) > 80 else "")
+        # Se a mensagem é muito curta e não tem verbos de ação fortes → provavelmente conversa
+        if len(mensagem) < TAMANHO_MINIMO_COMANDO:
+            max_score = max(scores.values())
+            if max_score < 0.5:  # Baixa confiança geral
+                scores[TipoIntencao.CONVERSAR] = 0.6
+                scores[TipoIntencao.DESCONHECIDA] = 0.3
         
-        # Prioridade (padrão: média)
-        prioridade = intencao.entidades.get("prioridade", PrioridadeTarefa.MEDIA.value)
+        # === DETERMINAR VENCEDOR ===
         
-        # Normalizar prioridade para inglês (API espera "medium", não "media")
-        prioridade_en = prioridade
-        if prioridade_en == "media":
-            prioridade_en = "medium"
-        elif prioridade_en == "alta":
-            prioridade_en = "high"
-        elif prioridade_en == "baixa":
-            prioridade_en = "low"
-        elif prioridade_en == "urgente":
-            prioridade_en = "urgent"
+        tipo_vencedor = max(scores, key=scores.get)
+        confianca_vencedor = scores[tipo_vencedor]
         
-        # Tentar encontrar projeto
-        projeto_id = None
-        projeto_nome = None
-        
-        if "projeto_sugerido" in intencao.entidades:
-            projeto_id = self._buscar_projeto_id(intencao.entidades["projeto_sugerido"])
-            if projeto_id:
-                projeto_nome = intencao.entidades["projeto_sugerido"]
-        
-        # Verificar se temos um projeto válido (ID > 0)
-        tem_projeto_valido = projeto_id and int(projeto_id) > 0
-        
-        try:
-            resultado = None
-            task_id = "N/A"
-            modo_criacao = ""
-            
-            # ============================================================
-            # 🔥 DECISÃO: PROJETO vs CAIXA DE ENTRADA (INBOX)
-            # ============================================================
-            
-            if tem_projeto_valido:
-                # ========================================
-                # CASO 1: Tem projeto → Criar tarefa no projeto
-                # ========================================
-                modo_criacao = "projeto"
-                
-                logger_brain.info(f"📁 Criando tarefa no PROJETO {projeto_id} ('{projeto_nome}')...")
-                
-                # Preparar descrição
-                descricao = f"[Criado via Brain Middleware - {datetime.now().strftime('%d/%m/%Y %H:%M')}]\n\n{mensagem}"
-                
-                # Adicionar prazo se detectado
-                due_date = None
-                if "prazo" in intencao.entidades:
-                    due_date = intencao.entidades["prazo"]
-                
-                try:
-                    resultado = self._lexflow.add_task(
-                        int(projeto_id),       # project_id (int)
-                        titulo,               # title (str)
-                        description=descricao,
-                        priority=prioridade_en,
-                        due_date=due_date
-                    )
-                    
-                    logger_brain.info(f"📦 Resultado add_task: {type(resultado).__name__}")
-                    
-                    # Extrair ID do resultado
-                    if isinstance(resultado, dict):
-                        task_data = resultado.get("task", resultado.get("note", {}))
-                        if isinstance(task_data, dict):
-                            task_id = task_data.get("id", "N/A")
-                        elif isinstance(task_data, (int, str)):
-                            task_id = str(task_data)
-                        # Se não tem success explícito mas tem dados, OK
-                        if task_id != "N/A" and not resultado.get("success"):
-                            resultado["success"] = True
-                            
-                    elif isinstance(resultado, list) and len(resultado) > 0:
-                        primeiro = resultado[0]
-                        if isinstance(primeiro, dict):
-                            task_id = primeiro.get("id", primeiro.get("task", {}).get("id", "N/A"))
-                        else:
-                            task_id = str(primeiro)
-                        resultado = {"success": True}
-                        
-                    elif resultado is not None:
-                        task_id = str(resultado)
-                        resultado = {"success": True}
-                        
-                except Exception as e_task:
-                    logger_brain.error(f"❌ Erro add_task: {e_task}")
-                    resultado = None
-                    
-            else:
-                # ========================================
-                # CASO 2: Sem projeto → CAIXA DE ENTRADA (INBOX)
-                # ========================================
-                modo_criacao = "inbox"
-                
-                logger_brain.info("📥 Sem projeto → Enviando para CAIXA DE ENTRADA (Inbox)")
-                
-                # Montar título formatado como tarefa
-                titulo_inbox = f"📋 {titulo}"
-                
-                # Adicionar prazo ao título se existir
-                if "prazo" in intencao.entidades:
-                    titulo_inbox += f" ⏰ {intencao.entidades['prazo']}"
-                
-                # Ícone de prioridade
-                icones_prioridade = {
-                    "high": "🔴",
-                    "low": "🟢",
-                    "urgent": "🚨",
-                    "medium": "🟡"
-                }
-                if prioridade_en in icones_prioridade:
-                    titulo_inbox += f" {icones_prioridade[prioridade_en]}"
-                
-                # Montar descrição rica
-                descricao_inbox = f"""[Criado via Brain Middleware - {datetime.now().strftime('%d/%m/%Y %H:%M')}]
-
-{mensagem}
-
-{'='*40}
-🤖 *Status:* Aguardando triagem
-⚡ *Prioridade:* {prioridade_en.capitalize()}"""
-                
-                if "prazo" in intencao.entidades:
-                    descricao_inbox += f"\n📅 *Prazo:* {intencao.entidades['prazo']}"
-                
-                descricao_inbox += "\n\n💡 *Ação necessária:* Mover para projeto quando possível"
-                
-                # Tags especiais para identificar como tarefa pendente
-                tags_tarefa = ["tarefa", "inbox", "brain-mw", f"prioridade:{prioridade_en}"]
-                
-                if "prazo" in intencao.entidades:
-                    tags_tarefa.append(f"prazo:{intencao.entidades['prazo']}")
-                
-                # Criar NOTA na Caixa de Entrada via /quicknotes/
-                logger_brain.info(f"📝 Criando nota inbox: '{titulo_inbox}'")
-                
-                try:
-                    resultado = self._lexflow.add_note(
-                        title=titulo_inbox,
-                        content=descricao_inbox,
-                        tags=tags_tarefa
-                    )
-                    
-                    logger_brain.info(f"📦 Resultado add_note: {type(resultado).__name__}")
-                    
-                    # Extrair ID da nota criada
-                    if isinstance(resultado, dict):
-                        note_data = resultado.get("note", resultado)
-                        if isinstance(note_data, dict):
-                            task_id = note_data.get("id", "N/A")
-                        elif isinstance(note_data, (int, str)):
-                            task_id = str(note_data)
-                        else:
-                            task_id = "N/A"
-                            
-                    elif resultado is not None:
-                        task_id = str(resultado)
-                    else:
-                        task_id = "N/A"
-                        
-                    if resultado:
-                        resultado = {"success": True}
-                        
-                except Exception as e_inbox:
-                    logger_brain.error(f"❌ Erro add_note (inbox): {e_inbox}", exc_info=True)
-                    resultado = None
-            
-            # ============================================================
-            # VERIFICAR SUCESSO E MONTAR RESPOSTA
-            # ============================================================
-            
-            sucesso = (resultado is not None) and resultado.get("success", False) and (task_id != "N/A")
-            
-            if sucesso:
-                logger_brain.info(f"✅ Tarefa criada! ID: {task_id} (modo: {modo_criacao})")
-                
-                # Montar resposta conforme o modo de criação
-                if modo_criacao == "inbox":
-                    resposta = f"""✅ *Tarefa enviada para a Caixa de Entrada!*
-
-📋 *{titulo}*
-📥 *Localização:* Caixa de Entrada (Inbox)"""
-
-                    if "prazo" in intencao.entidades:
-                        resposta += f"\n📅 Prazo: {intencao.entidades['prazo']}"
-                    
-                    if prioridade_en != "medium":
-                        icon_prio = {"high": "🔴", "low": "🟢", "urgent": "🚨", "medium": "🟡"}
-                        resposta += f"\n⚡ Prioridade: {icon_prio.get(prioridade_en, '⚪')} {prioridade_en.capitalize()}"
-                    
-                    resposta += """
-
-💡 *Aguardando sua triagem:*
-   • Mover para um projeto específico
-   • Definir sub-tarefas se necessário
-   • Ajustar prazo se preciso"""
-                    
-                    sugestoes = [
-                        "Quer mover para algum projeto?",
-                        "Quer definir lembretes?",
-                        "Quer ver outras tarefas na caixa de entrada?"
-                    ]
-                    
-                else:  # modo_criacao == "projeto"
-                    resposta = f"""✅ *Tarefa criada com sucesso!*
-
-📋 *{titulo}*"""
-
-                    if "prazo" in intencao.entidades:
-                        resposta += f"\n📅 Prazo: {intencao.entidades['prazo']}"
-                    
-                    icon_prio = {"urgente": "🔴", "alta": "🟠", "media": "🟡", "baixa": "🟢"}
-                    resposta += f"\n⚡ Prioridade: {icon_prio.get(prioridade, '⚪')} {prioridade.capitalize()}"
-                    
-                    if projeto_nome:
-                        resposta += f"\n📁 Projeto: {projeto_nome}"
-                    
-                    sugestoes = [
-                        "Quer que eu crie uma nota com mais detalhes?",
-                        "Quer definir lembretes para esta tarefa?",
-                        "Quer adicionar sub-tarefas?"
-                    ]
-                
-                return RespostaBrain(
-                    sucesso=True,
-                    acao_executada="criar_tarefa",
-                    resposta_ia=resposta,
-                    detalhes={
-                        "task_id": task_id, 
-                        "titulo": titulo,
-                        "modo_criacao": modo_criacao,
-                        "project_id": projeto_id if tem_projeto_valido else None,
-                        "prioridade": prioridade_en
-                    },
-                    sugestoes=sugestoes
-                )
-            else:
-                # Falha na criação
-                erro_msg = "Erro desconhecido"
-                if resultado is None:
-                    erro_msg = "Sem resposta da API"
-                elif isinstance(resultado, dict) and resultado.get("error"):
-                    erro_msg = str(resultado.get("error"))[:100]
-                    
-                raise Exception(erro_msg)
-                
-        except Exception as e:
-            logger_brain.error(f"❌ Erro ao criar tarefa: {e}", exc_info=True)
-            return RespostaBrain(
-                sucesso=False,
-                acao_executada="criar_tarefa",
-                resposta_ia=f"❌ Não consegui criar a tarefa.\n\nErro: `{str(e)[:80]}`\n\n_Tente novamente ou use /tarefa manualmente_",
-                erro=str(e)
-            ) 
-
-            
-    def _buscar_projeto_id(self, nome_projeto: str) -> Optional[int]:
-        """
-        Busca o ID de um projeto pelo nome.
-        
-        Args:
-            nome_projeto: Nome do projeto (parcial ou completo)
-        
-        Returns:
-            ID do projeto ou None se não encontrado
-        """
-        try:
-            resultado = self._lexflow.get_projects()
-            
-            if resultado.get("success") and resultado.get("projects"):
-                projetos = resultado["projects"]
-                
-                # Buscar exato ou parcial
-                nome_lower = nome_projeto.lower()
-                for proj in projetos:
-                    if isinstance(proj, dict):
-                        proj_nome = proj.get("name", "").lower()
-                        proj_id = proj.get("id")
-                        if nome_lower in proj_nome or proj_nome in nome_lower:
-                            logger_brain.debug(f"📁 Projeto encontrado: {proj_nome} (ID: {proj_id})")
-                            return proj_id
-            
-            return None
-            
-        except Exception as e:
-            logger_brain.warning(f"⚠️ Erro ao buscar projeto: {e}")
-            return None
-    
-    # -----------------------------------------------------------------
-    # AÇÃO: BUSCAR INFORMAÇÕES (RAG)
-    # -----------------------------------------------------------------
-    
-    def _acao_buscar_info(
-        self, 
-        intencao: IntencaoDetectada, 
-        mensagem: str, 
-        contexto: Optional[dict]
-    ) -> RespostaBrain:
-        """
-        Busca informações usando RAG System e gera resposta contextual.
-        
-        Args:
-            intencao: Intenção com entidades extraídas
-            mensagem: Mensagem original
-            contexto: Contexto adicional
-        
-        Returns:
-            RespostaBrain com informações encontradas
-        """
-        logger_brain.info("🔍 Executando: BUSCAR INFORMAÇÕES (RAG)")
-        
-        # Extrair query de busca
-        query = intencao.entidades.get("conteudo", mensagem)
-        
-        # Limpar query removendo palavras de busca
-        query_limpa = re.sub(
-            r"(o que eu|já|escrevi|falei|anotei|sobre|resuma|me dê|me mostre|quais são|como estão)",
-            "",
-            query,
-            flags=re.IGNORECASE
-        ).strip()
-        
-        if len(query_limpa) < 3:
-            query_limpa = query
-        
-        try:
-            # Buscar no RAG System
-            logger_brain.info(f"🔍 Buscando no RAG: '{query_limpa}'")
-            
-            resultados_rag = self._rag.buscar(
-                query=query_limpa,
-                n_results=5,
-                estrategia="hibrida"  # type: ignore
+        # Ajuste final de confiança (não deixar muito alto para ações)
+        if tipo_vencedor in [TipoIntencao.CRIAR_TAREFA, TipoIntencao.CRIAR_NOTA]:
+            # Se não é comando óbvio, CAPAR confiança em 0.75 (força clarificação!)
+            eh_obvio = (
+                scores[tipo_vencedor] >= 0.6 or
+                any(re.search(p, msg_lower, re.I) for p in PadroesDetectacao.COMANDOS_OBVIOS_NOTA + PadroesDetectacao.COMANDOS_OBVIOS_TAREFA)
             )
             
-            if not resultados_rag or not resultados_rag.get("resultados"):
-                return RespostaBrain(
-                    sucesso=True,
-                    acao_executada="buscar_info",
-                    resposta_ia=f"🔍 **Não encontrei nada sobre** *'{query_limpa}'*\n\nParece que você ainda não tem notas sobre esse assunto. Quer que eu anote sua pergunta para pesquisar depois?",
-                    detalhes={"query": query_limpa, "resultados_encontrados": 0},
-                    sugestoes=["Quer que eu anote esse tema para pesquisar?"]
-                )
-            
-            # Preparar contextos para o LLM
-            contextos = []
-            for i, res in enumerate(resultados_rag.get("resultados", [])[:5], 1):
-                contextos.append(f"[{i}] {res.get('conteudo', '')[:200]}...")
-            
-            contexto_texto = "\n".join(contextos)
-            
-            # Gerar resposta com LLM
-            prompt_resposta = f"""Baseado nas informações abaixo, responda à pergunta do usuário de forma clara e útil.
-
-PERGUNTA DO USUÁRIO: {mensagem}
-
-INFORMAÇÕES ENCONTRADAS NO SISTEMA:
-{contexto_texto}
-
-Responda de forma:
-- Clara e direta
-- Destacando os pontos principais
-- Com emojis quando apropriado
-- Em português brasileiro"""
-
-            resposta_llm = self._llm.gerar(prompt_resposta)
-            
-            num_resultados = len(resultados_rag.get("resultados", []))
-            
-            resposta_final = f"""🔍 **Encontrei {num_resultados} referências sobre** *'{query_limpa}'*
-
----
-{resposta_llm}
----
-
-💡 Quer que eu busque mais detalhes sobre algum ponto específico?"""
-            
-            return RespostaBrain(
-                sucesso=True,
-                acao_executada="buscar_info",
-                resposta_ia=resposta_final,
-                detalhes={
-                    "query": query_limpa,
-                    "resultados_encontrados": num_resultados,
-                    "estrategia": "hibrida"
-                },
-                sugestoes=[
-                    "Quer que eu crie um plano baseado nessas informações?",
-                    "Quer que eu gere ideias relacionadas?"
-                ]
+            if not eh_obvio and confianca_vencedor > 0.75:
+                confianca_vencedor = 0.75  # Força clarificação!
+        
+        logger_brain.info(f"📊 Scores: {[(k.value, f'{v:.2f}') for k,v in scores.items() if v > 0]}")
+        
+        return IntencaoDetectada(
+            tipo=tipo_vencedor,
+            confianca=confianca_vencedor,
+            entidades=entidades,
+            texto_original=mensagem,
+            texto_normalizado=msg_norm
+        )
+    
+    def _eh_conversa_casual(self, mensagem: str, msg_norm: str) -> bool:
+        """
+        Detecta se a mensagem é CONVERSA CASUAL (não é um comando).
+        
+        Esta função é CRÍTICA para evitar criar tarefas para tudo!
+        """
+        msg_lower = mensagem.lower().strip()
+        
+        # 1. Mensagem muito curta (provavelmente resposta rápida)
+        if len(msg_lower) < 10:
+            for padrao in PadroesDetectacao.CONVERSA_CASUAL:
+                if re.match(padrao, msg_lower, re.I):
+                    return True
+        
+        # 2. Padrões de conversa (em qualquer tamanho)
+        for padrao in PadroesDetectacao.CONVERSA_CASUAL:
+            if re.match(padrao, msg_lower, re.I):
+                return True
+        
+        # 3. Perguntas sobre o assistente (sem verbos de ação)
+        if re.search(r"(voce|você|vc)\b.*(é|pode|sabe|ajuda|ajudar)", msg_lower, re.I):
+            if not any(re.search(p, msg_lower, re.I) for p in PadroesDetectacao.INDICADORES_ACAO):
+                return True
+        
+        return False
+    
+    def _decisao_inteligente(self, intencao: IntencaoDetectada, mensagem: str, usuario_id: int) -> RespostaBrain:
+        """
+        Tomada de decisão INTELIGENTE baseada na confiança.
+        
+        LÓGICA v2.1.1:
+        - Confiança > 0.90 E comando óbvio → EXECUTAR DIRETO
+        - Confiança 0.50-0.90 → CLARIFICAR (PERGUNTAR!)
+        - Confiança < 0.50 → CONVERSAR ou DESCONHECIDO
+        """
+        confianca = intencao.confianca
+        tipo = intencao.tipo
+        
+        logger_brain.info(f"🧠 Decisão: conf={confianca:.2f}, tipo={tipo.value}")
+        
+        # === CASO 1: EXECUTAR DIRETO (só se for MUITO óbvio!) ===
+        if confianca >= CONFIANCA_EXECUTAR_DIRETO:
+            # Verificação extra: é realmente óbvio?
+            msg_lower = mensagem.lower()
+            comando_obvio = (
+                any(re.search(p, msg_lower, re.I) for p in PadroesDetectacao.COMANDOS_OBVIOS_NOTA) or
+                any(re.search(p, msg_lower, re.I) for p in PadroesDetectacao.COMANDOS_OBVIOS_TAREFA) or
+                tipo in [TipoIntencao.BUSCAR_INFO, TipoIntencao.GERAR_IDEIAS, 
+                        TipoIntencao.CONSULTAR_METRICAS, TipoIntencao.CRIAR_PLANO]
             )
             
-        except Exception as e:
-            logger_brain.error(f"❌ Erro na busca RAG: {e}")
-            return RespostaBrain(
-                sucesso=False,
-                acao_executada="buscar_info",
-                resposta_ia=f"❌ Erro ao buscar informações: {str(e)[:50]}",
-                erro=str(e)
-            )
+            if comando_obvio:
+                logger_brain.info(f"⚡ Execução direta (comando óbvio): {tipo.value}")
+                
+                if self._executor:
+                    return self._executor.executar(intencao, mensagem, {"usuario_id": usuario_id})
+        
+        # === CASO 2: CLARIFICAR (PERGUNTAR ANTES DE AGIR!) ===
+        if confianca >= CONFIANCA_CLARIFICACAO and tipo in [TipoIntencao.CRIAR_TAREFA, TipoIntencao.CRIAR_NOTA]:
+            logger_brain.info(f"🤔 Clarificação necessária (confiança média): {tipo.value}")
+            return self._solicitar_clarificacao(intencao, mensagem, usuario_id)
+        
+        # === CASO 3: PARA OUTRAS INTENÇÕES COM MÉDIA CONFIANÇA ===
+        if confianca >= CONFIANCA_CLARIFICACAO:
+            logger_brain.info(f"⚡ Execução para intenção não-crítica: {tipo.value}")
+            
+            if self._executor:
+                return self._executor.executar(intencao, mensagem, {"usuario_id": usuario_id})
+        
+        # === CASO 4: CONVERSA CASUAL ou DESCONHECIDO ===
+        if tipo == TipoIntencao.CONVERSAR:
+            return self._gerar_resposta_conversacional(mensagem, "", usuario_id)
+        
+        # Desconhecido com sugestões
+        return self._gerar_resposta_desconhecida(mensagem)
     
-    # -----------------------------------------------------------------
-    # AÇÃO: GERAR IDEIAS
-    # -----------------------------------------------------------------
+    # =========================================================================
+    # GERADORES DE RESPOSTA
+    # =========================================================================
     
-    def _acao_gerar_ideias(
-        self, 
-        intencao: IntencaoDetectada, 
-        mensagem: str, 
-        contexto: Optional[dict]
-    ) -> RespostaBrain:
-        """
-        Gera ideias usando RAG + LLM baseadas nos dados do usuário.
+    def _gerar_resposta_conversacional(self, mensagem: str, msg_norm: str, usuario_id: Optional[int]) -> RespostaBrain:
+        """Gera resposta conversacional amigável."""
         
-        Args:
-            intencao: Intenção com entidades extraídas
-            mensagem: Mensagem original
-            contexto: Contexto adicional
+        msg_lower = mensagem.lower().strip()
         
-        Returns:
-            RespostaBrain com ideias geradas
-        """
-        logger_brain.info("💡 Executando: GERAR IDEIAS")
+        # Saudações
+        if any(re.match(p, msg_lower, re.I) for p in [
+            r"^(eai|e ai|ei|oi|olá|ola|hey|hello|hi|salve|fala|opa|oie)\b",
+            r"^(bom dia|boa tarde|boa noite)\b"
+        ]):
+            hora = datetime.now().hour
+            if hora < 12: saudacao_tempo = "Bom dia!"
+            elif hora < 18: saudacao_tempo = "Boa tarde!"
+            else: saudacao_tempo = "Boa noite!"
+            
+            resposta = f"""{saudacao_tempo} ☀️
+
+Sou o **{NOME_ASSISTENTE_DISPLAY}**, seu assistente pessoal! 🧙
+
+Como posso te ajudar agora?
+
+💡 *Exemplos:*
+• "Mago, **anota**: comprar microfone"
+• "**Lembra** de terminar o vídeo **sexta**"
+• "**Quais ideias** para vídeo sobre automação?"
+• "**O que eu escrevi** sobre YouTube?"
+
+Estou por aqui! 😊"""
+            
+            return RespostaBrain(sucesso=True, acao_executada="conversar", resposta_ia=resposta)
         
-        # Extrair tema
-        tema = intencao.entidades.get("conteudo", mensagem)
-        quantidade = intencao.entidades.get("quantidade", 5)
-        
-        # Limpar tema
-        tema_limpo = re.sub(
-            r"(ideias?|sugira|sugestões|brainstorm|dê|me dá|crie|para|sobre)",
-            "",
-            tema,
-            flags=re.IGNORECASE
-        ).strip()
-        
-        if len(tema_limpo) < 2:
-            tema_limpo = "conteúdo em geral"
-        
-        try:
-            # Buscar contextos relacionados no RAG
-            logger_brain.info(f"🔍 Buscando contextos para brainstorm: '{tema_limpo}'")
-            
-            contextos_rag = []
-            try:
-                rag_result = self._rag.buscar(
-                    query=tema_limpo,
-                    n_results=3,
-                    estrategia="vetorial"  # type: ignore
-                )
-                if rag_result and rag_result.get("resultados"):
-                    for res in rag_result["resultados"][:3]:
-                        contextos_rag.append(res.get("conteudo", "")[:150])
-            except Exception as e:
-                logger_brain.warning(f"⚠️ Erro ao buscar contextos RAG: {e}")
-            
-            contexto_base = "\n".join(contextos_rag) if contextos_rag else "Sem contextos anteriores encontrados."
-            
-            # Prompt para geração de ideias
-            prompt_ideias = f"""Você é um assistente criativo especialista em gerar ideias de conteúdo para criadores digitais.
-
-TEMA SOLICITADO: {tema_limpo}
-QUANTIDADE DE IDEIAS: {quantidade}
-
-CONTEXTOS ANTERIORES DO USUÁRIO:
-{contexto_base}
-
-Gere {quantidade} ideias CRIATIVAS e ORIGINAIS sobre o tema.
-
-Para cada ideia, inclua:
-1. Título chamativo (clickbait ético)
-2. Descrição breve (2-3 linhas)
-3. Por que vai funcionar (motivo)
-4. Score de viralidade (🔥1-10)
-5. Score de facilidade (✏️1-10)
-
-Formato de resposta:
-💡 **IDEIA N**: [Título]
-📝 Descrição...
-🎯 Por que funciona: ...
-🔥 Viralidade: X/10 | ✏️ Facilidade: X/10
-
-Seja criativo e pense como um YouTuber/TikToker de sucesso!"""
-
-            resposta_llm = self._llm.gerar(prompt_ideias)
-            
-            resposta_final = f"""💡 **{quantidade} IDEIAS SOBRE** *'{tema_limpo.upper()}'*
-
-*(Geradas com base nos seus dados)*
-
----
-{resposta_llm}
----
-
-🎯 Quer que eu transforme alguma ideia em tarefa?
-📁 Quer salvar essas ideias como nota?"""
-            
-            return RespostaBrain(
-                sucesso=True,
-                acao_executada="gerar_ideias",
-                resposta_ia=resposta_final,
-                detalhes={
-                    "tema": tema_limpo,
-                    "quantidade": quantidade,
-                    "contextos_usados": len(contextos_rag)
-                },
-                sugestoes=[
-                    "Quer criar tarefas para essas ideias?",
-                    "Quer salvar como nota para referência futura?",
-                    "Quer mais ideias sobre outro tema?"
-                ]
-            )
-            
-        except Exception as e:
-            logger_brain.error(f"❌ Erro ao gerar ideias: {e}")
-            return RespostaBrain(
-                sucesso=False,
-                acao_executada="gerar_ideias",
-                resposta_ia=f"❌ Erro ao gerar ideias: {str(e)[:50]}",
-                erro=str(e)
-            )
-    
-    # -----------------------------------------------------------------
-    # AÇÃO: CONSULTAR MÉTRICAS
-    # -----------------------------------------------------------------
-    
-    def _acao_consultar_metricas(
-        self, 
-        intencao: IntencaoDetectada, 
-        mensagem: str, 
-        contexto: Optional[dict]
-    ) -> RespostaBrain:
-        """
-        Consulta e apresenta métricas de produtividade do usuário.
-        
-        Args:
-            intencao: Intenção detectada
-            mensagem: Mensagem original
-            contexto: Contexto adicional
-        
-        Returns:
-            RespostaBrain com métricas atuais
-        """
-        logger_brain.info("📊 Executando: CONSULTAR MÉTRICAS")
-        
-        try:
-            # Coletar métricas de vários fontes
-            metricas: dict[str, Any] = {}
-            
-            # Métricas do RAG
-            try:
-                stats_rag = self._rag.obter_estatisticas()  # type: ignore
-                metricas["documentos_indexados"] = stats_rag.get("total_documentos", 0)
-                metricas["notas_lexflow"] = stats_rag.get("notas_lexflow", 0)
-            except Exception as e:
-                logger_brain.warning(f"⚠️ Erro ao obter stats RAG: {e}")
-            
-            # Métricas do Lex Flow (tarefas)
-            try:
-                inbox = self._lexflow.get_inbox()
-                if inbox.get("success"):
-                    metricas["tarefas_inbox"] = len(inbox.get("inbox", []))
-            except Exception as e:
-                logger_brain.warning(f"⚠️ Erro ao obter inbox: {e}")
-            
-            # Projetos
-            try:
-                projetos = self._lexflow.get_projects()
-                if projetos.get("success"):
-                    metricas["projetos_ativos"] = len(projetotos.get("projects", []))  # type: ignore
-            except Exception as e:
-                logger_brain.warning(f"⚠️ Erro ao obter projetos: {e}")
-            
-            # Data/hora atual
-            agora = datetime.now()
-            metricas["data_hora"] = agora.strftime("%d/%m/%Y %H:%M")
-            metricas["dia_semana"] = ["Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado", "Domingo"][agora.weekday()]
-            
-            # Gerar resposta com LLM para análise personalizada
-            prompt_metricas = f"""Analise as métricas atuais do usuário e dê um feedback motivador e útil.
-
-MÉTRICAS ATUAIS:
-- Documentos indexados no sistema: {metricas.get('documentos_indexados', 0)}
-- Notas no Lex Flow: {metricas.get('notas_lexflow', 0)}
-- Tarefas no Inbox: {metricas.get('tarefas_inbox', 0)}
-- Projetos ativos: {metricas.get('projetos_ativos', 0)}
-- Data/Hora: {metricas.get('data_hora', '')} ({metricas.get('dia_semana', '')})
-
-Responda de forma:
-- Motivadora e positiva
-- Destacando conquistas
-- Sugerindo próximos passos se relevante
-- Com emojis
-- Concisa (máx 5 linhas)"""
-
-            try:
-                feedback_llm = self._llm.gerar(prompt_metricas)
-            except Exception:
-                feedback_llm = "Continue assim! Você está evoluindo bem! 💪"
-            
-            resposta_final = f"""📊 **SEU PAINEL DE MÉTRICAS**
-📅 *{metricas.get('dia_semana', '')}, {metricas.get('data_hora', '')}*
-
-━━━━━━━━━━━━━━━━━━━━
-📚 **Conhecimento**
-   📄 Documentos indexados: `{metricas.get('documentos_indexados', 0)}`
-   📝 Notas salvas: `{metricas.get('notas_lexflow', 0)}`
-
-✅ **Tarefas & Projetos**
-   📥 Tarefas no Inbox: `{metricas.get('tarefas_inbox', 0)}`
-   📁 Projetos ativos: `{metricas.get('projetos_ativos', 0)}`
-━━━━━━━━━━━━━━━━━━━━
-
-💭 *{feedback_llm}*"""
-            
-            return RespostaBrain(
-                sucesso=True,
-                acao_executada="consultar_metricas",
-                resposta_ia=resposta_final,
-                detalhes=metricas,
-                sugestoes=[
-                    "Quer ver suas tarefas pendentes?",
-                    "Quer criar uma nova tarefa?"
-                ]
-            )
-            
-        except Exception as e:
-            logger_brain.error(f"❌ Erro ao consultar métricas: {e}")
-            return RespostaBrain(
-                sucesso=False,
-                acao_executada="consultar_metricas",
-                resposta_ia=f"❌ Erro ao carregar métricas: {str(e)[:50]}",
-                erro=str(e)
-            )
-    
-    # -----------------------------------------------------------------
-    # AÇÃO: CRIAR PLANO
-    # -----------------------------------------------------------------
-    
-    def _acao_criar_plano(
-        self, 
-        intencao: IntencaoDetectada, 
-        mensagem: str, 
-        contexto: Optional[dict]
-    ) -> RespostaBrain:
-        """
-        Cria um plano ou estratégia baseada nos dados do usuário.
-        
-        Args:
-            intencao: Intenção com entidades extraídas
-            mensagem: Mensagem original
-            contexto: Contexto adicional
-        
-        Returns:
-            RespostaBrain com plano gerado
-        """
-        logger_brain.info("🎯 Executando: CRIAR PLANO")
-        
-        # Extrair objetivo
-        objetivo = intencao.entidades.get("conteudo", mensagem)
-        objetivo_limpo = re.sub(
-            r"(plano|estratégia|roadmap|plano de ação|roteiro|como|para|de)",
-            "",
-            objetivo,
-            flags=re.IGNORECASE
-        ).strip()
-        
-        if len(objetivo_limpo) < 2:
-            objetivo_limpo = "escalar produção de conteúdo"
-        
-        try:
-            # Buscar contextos relevantes
-            logger_brain.info(f"🔍 Buscando contextos para plano: '{objetivo_limpo}'")
-            
-            contextos = []
-            try:
-                rag_result = self._rag.buscar(
-                    query=objetivo_limpo,
-                    n_results=5,
-                    estrategia="hibrida"  # type: ignore
-                )
-                if rag_result and rag_result.get("resultados"):
-                    for res in rag_result["resultados"][:5]:
-                        contextos.append(res.get("conteudo", "")[:200])
-            except Exception as e:
-                logger_brain.warning(f"⚠️ Erro ao buscar contextos: {e}")
-            
-            contexto_texto = "\n".join(contextos) if contextos else "Sem informações prévias encontradas."
-            
-            # Gerar plano com LLM
-            prompt_plano = f"""Você é um consultor estratégico especialista em produtividade e criação de conteúdo digital.
-
-OBJETIVO DO USUÁRIO: {objetivo_limpo}
-
-INFORMAÇÕES DISPONÍVEIS SOBRE O USUÁRIO:
-{contexto_texto}
-
-Crie um PLANO DE AÇÃO ESTRUTURADO e PRÁTICO.
-
-Estrutura do plano:
-🎯 **OBJETIVO CLARO** (1 linha)
-📋 **VISÃO GERAL** (2-3 linhas)
-📅 **FASES** (divida em 3-4 fases com prazos sugeridos):
-   Fase 1: Fundação (Semana 1-2)
-   Fase 2: Execução (Semana 3-6)
-   Fase 3: Otimização (Semana 7-12)
-   
-Cada fase deve ter:
-- 3-5 ações específicas
-- KPIs/métricas de sucesso
-- Ferramentas sugeridas
-
-⚠️ **RISCOS E MITIGAÇÕES** (2-3 riscos principais)
-💡 **DICAS EXTRA** (baseado nos dados do usuário)
-
-Seja PRÁTICO e REALISTA. O usuário é criador de conteúdo com foco em YouTube/Instagram."""
-
-            resposta_llm = self._llm.gerar(prompt_plano)
-            
-            resposta_final = f"""🎯 **PLANO DE AÇÃO:** *{objetivo_limpo.upper()}*
-
-*(Gerado com base nos seus dados)*
-
-═══════════════════════════════
-{resposta_llm}
-═══════════════════════════════
-
-✅ Quer que eu crie tarefas para cada fase deste plano?
-💾 Quer salvar este plano como nota?"""
-            
-            return RespostaBrain(
-                sucesso=True,
-                acao_executada="criar_plano",
-                resposta_ia=resposta_final,
-                detalhes={"objetivo": objetivo_limpo, "contextos_usados": len(contextos)},
-                sugestoes=[
-                    "Criar tarefas para as fases do plano?",
-                    "Salvar plano como nota?",
-                    "Buscar mais informações sobre algum ponto específico?"
-                ]
-            )
-            
-        except Exception as e:
-            logger_brain.error(f"❌ Erro ao criar plano: {e}")
-            return RespostaBrain(
-                sucesso=False,
-                acao_executada="criar_plano",
-                resposta_ia=f"❌ Erro ao gerar plano: {str(e)[:50]}",
-                erro=str(e)
-            )
-    
-    # -----------------------------------------------------------------
-    # AÇÃO: CONVERSAR (FALLBACK CASUAL)
-    # -----------------------------------------------------------------
-    
-    def _acao_conversar(
-        self, 
-        intencao: IntencaoDetectada, 
-        mensagem: str, 
-        contexto: Optional[dict]
-    ) -> RespostaBrain:
-        """
-        Responde conversas casuais ou perguntas gerais.
-        
-        Args:
-            intencao: Intenção detectada
-            mensagem: Mensagem original
-            contexto: Contexto adicional
-        
-        Returns:
-            RespostaBrain com resposta conversacional
-        """
-        logger_brain.info("💬 Executando: CONVERSAR")
-        
-        try:
-            prompt_conversa = f"""Você é o Lex, um assistente pessoal de IA amigável e prestativo.
-
-O usuário enviou: "{mensagem}"
-
-Responda de forma:
-- Natural e conversacional
-- Amigável mas profissional
-- Se for pergunta, responda diretamente
-- Se for saudação, cumprimente de volta
-- Se parecer tarefa/lembrete, ofereça-se para ajudar
-- Máximo 3-4 linhas
-- Use emojis moderadamente"""
-
-            resposta_llm = self._llm.gerar(prompt_conversa)
-            
+        # Perguntas "como você está"
+        if any(x in msg_lower for x in ["tudo bem", "tudo bom", "como vai", "como você está", "como vc ta"]):
             return RespostaBrain(
                 sucesso=True,
                 acao_executada="conversar",
-                resposta_ia=resposta_llm,
-                sugestoes=[
-                    "Posso ajudar com mais algo?",
-                    "Quer criar uma nota ou tarefa?"
-                ]
+                resposta_ia=f"""Tudo certo por aqui! 💪 Operando normalmente!
+
+E você, como estão os projetos? Precisa de ajuda com algo específico?
+
+📋 *Posso:* Criar tarefas, anotar ideias, buscar informações ou gerar conteúdo!
+
+É só pedir! 😊"""
             )
-            
-        except Exception as e:
-            logger_brain.error(f"❌ Erro na conversa: {e}")
+        
+        # Agradecimentos
+        if any(x in msg_lower for x in ["obrigado", "valeu", "thanks", "vlw", "grato"]):
             return RespostaBrain(
-                sucesso=False,
+                sucesso=True,
                 acao_executada="conversar",
-                resposta_ia="Hey! 👋 Como posso te ajudar hoje? Posso criar notas, tarefas, buscar informações ou gerar ideias!",
-                erro=str(e)
+                resposta_ia=f"Por nada! 😊 Sempre que precisar, é só chamar! {NOME_ASSISTENTE_DISPLAY} tá online! 🧙‍♂️"
             )
+        
+        # Despedidas
+        if any(x in msg_lower for x in ["tchau", "ate logo", "até logo", "falou", "flw", "bye", "ate mais"]):
+            return RespostaBrain(
+                sucesso=True,
+                acao_executada="conversar",
+                resposta_ia=f"Até mais! 👋 Bom trabalho! {NOME_ASSISTENTE_DISPLAY} fica aqui caso precise! 🧙✨"
+            )
+        
+        # Resposta genérica conversacional (usa LLM se disponível)
+        if self._llm:
+            try:
+                prompt = f"""Você é o {NOME_ASSISTENTE_DISPLAY}, assistente pessoal amigável e prestativo.
+O usuário disse: "{mensagem}"
+
+Responda de forma natural, amigável, máximo 4 linhas.
+Use emojis ocasionalmente. Seja útil mas conversacional.
+NÃO pareça um robô!"""
+
+                resposta_llm = self._llm.gerar(prompt)
+                
+                return RespostaBrain(
+                    sucesso=True,
+                    acao_executada="conversar_llm",
+                    resposta_ia=resposta_llm
+                )
+            except Exception as e:
+                logger_brain.warning(f"⚠️ Erro LLM conversacional: {e}")
+        
+        # Fallback sem LLM
+        return RespostaBrain(
+            sucesso=True,
+            acao_executada="conversar_fallback",
+            resposta_ia=f"""Interessante! 🤔
+
+Não tenho certeza do que você quer dizer com "{mensagem[:30]}..."
+
+Mas posso ajudar com:
+
+📝 **Anotar** algo
+✅ **Criar lembretes/tarefas**
+🔍 **Buscar informações**
+💡 **Gerar ideias**
+
+Quer tentar de outro jeito? 😊"""
+        )
     
-    # -----------------------------------------------------------------
-    # AÇÃO: DESCONHECIDA (FALLBACK)
-    # -----------------------------------------------------------------
-    
-    def _acao_desconhecida(
-        self, 
-        intencao: IntencaoDetectada, 
-        mensagem: str, 
-        contexto: Optional[dict]
-    ) -> RespostaBrain:
-        """
-        Ação fallback quando não consegue detectar a intenção.
-        
-        Args:
-            intencao: Intenção desconhecida
-            mensagem: Mensagem original
-            contexto: Contexto adicional
-        
-        Returns:
-            RespostaBrain pedindo esclarecimento
-        """
-        logger_brain.info("❓ Executando: INTENÇÃO DESCONHECIDA")
-        
-        resposta = """🤔 **Não tenho certeza do que você precisa...**
-
-Mas posso te ajudar com várias coisas:
-
-📝 **"Lex, anota [algo]"** → Crio uma nota
-✅ **"Lex, lembra que tenho que [fazer]"** → Crio uma tarefa
-🔍 **"Lex, o que eu escrevi sobre [tema]?"** → Busco suas anotações
-💡 **"Lex, me dá ideias sobre [tema]"** → Gero ideias criativas
-📊 **"Lex, como estão minhas métricas?"** → Mostro seu progresso
-🎯 **"Lex, faz um plano para [objetivo]"** → Crio estratégia
-
-**Como posso te ajudar?** 😊"""
+    def _gerar_resposta_desconhecida(self, mensagem: str) -> RespostaBrain:
+        """Gera resposta para intenção desconhecida com sugestões."""
         
         return RespostaBrain(
             sucesso=True,
             acao_executada="desconhecida",
-            resposta_ia=resposta,
-            sugestoes=["Tente reformular sua mensagem"]
+            resposta_ia=f"""🤔 *Hum... não tenho certeza do que você quer*
+
+Você disse: "{mensagem[:50]}"
+
+💡 **Mas posso te ajudar assim:**
+
+📝 `{NOME_ASSISTENTE}, anota: [algo]`
+→ Cria uma nota rápida
+
+✅ `{NOME_ASSISTENTE}, lembra de [fazer] [quando]`
+→ Cria tarefa com prazo
+
+🔍 `{NOME_ASSISTENTE}, o que eu escrevi sobre [tema]?`
+→ Busca nas suas notas
+
+💡 `{NOME_ASSISTENTE}, ideias sobre [assunto]`
+→ Gera ideias criativas
+
+**Como posso ajudar?** 😊"""
         )
-
-
-# ============================================================================
-# FUNÇÃO AUXILIAR PARA USO SIMPLIFICADO
-# ============================================================================
-
-def processar_mensagem(mensagem: str) -> RespostaBrain:
-    """
-    Função conveniente para processar uma mensagem sem instanciar manualmente.
     
-    Args:
-        mensagem: Texto da mensagem do usuário
+    # =========================================================================
+    # UTILITÁRIOS
+    # =========================================================================
     
-    Returns:
-        RespostaBrain com resultado do processamento
+    def limpar_contexto_usuario(self, usuario_id: int) -> None:
+        """Limpa contexto de conversação de um usuário."""
+        if usuario_id in self._contextos_usuarios:
+            del self._contextos_usuarios[usuario_id]
+        if usuario_id in self._clarificacoes_pendentes:
+            del self._clarificacoes_pendentes[usuario_id]
+        logger_brain.info(f"🗑️ Contexto limpo para user {usuario_id}")
     
-    Example:
-        >>> from engine.brain_middleware import processar_mensagem
-        >>> resultado = processar_mensagem("Lex, anota: comprar microfone")
-        >>> print(resultado.resposta_ia)
-    """
-    brain = BrainMiddleware()
-    return brain.processar(mensagem)
+    def obter_estatisticas_v21(self) -> Dict[str, Any]:
+        """Retorna estatísticas do modo conversacional v2.1.1."""
+        return {
+            "versao": "2.1.1",
+            "modo": "CONVERSACIONAL_INTELIGENTE",
+            "inicializado": self._inicializado,
+            "contextos_ativos": len(self._contextos_usuarios),
+            "clarificacoes_pendentes": len(self._clarificacoes_pendentes),
+            "threshold_executar": CONFIANCA_EXECUTAR_DIRETO,
+            "threshold_clarificar": CONFIANCA_CLARIFICACAO,
+            "recursos": {
+                "llm": self._llm is not None,
+                "rag": self._rag is not None,
+                "lexflow": self._lexflow is not None,
+                "executor": self._executor is not None
+            }
+        }
 
 
-# ============================================================================
-# BLOCO DE TESTE RÁPIDO
-# ============================================================================
+# =============================================================================
+# INSTÂNCIA GLOBAL (Singleton Pattern)
+# =============================================================================
 
-if __name__ == "__main__":
-    print("=" * 60)
-    print("🧠 BRAIN MIDDLEWARE - TESTE RÁPIDO")
-    print("=" * 60)
-    
-    # Inicializar
-    brain = BrainMiddleware()
-    
-    if brain.inicializar():
-        print("\n✅ Brain Middleware inicializado!")
-        
-        # Testes de exemplo
-        testes = [
-            "Lex, anota que preciso comprar um microfone Blue Yeti",
-            "Lex, lembra que tenho que terminar o vídeo até sexta",
-            "Lex, o que eu já escrevi sobre YouTube?",
-            "Lex, me dá 5 ideias de vídeo sobre automação com IA",
-            "Lex, como estão minhas métricas dessa semana?",
-            "Lex, cria um plano para escalar meu canal em 90 dias",
-        ]
-        
-        print("\n🧪 Executando testes...\n")
-        
-        for i, teste in enumerate(testes, 1):
-            print(f"--- Teste {i}: {teste[:50]}... ---")
-            resultado = brain.processar(teste)
-            print(f"✅ Sucesso: {resultado.sucesso}")
-            print(f"📝 Ação: {resultado.acao_executada}")
-            print(f"💬 Resposta: {resultado.resposta_ia[:100]}...\n")
-        
-        print("🎉 Testes concluídos!")
-        
-    else:
-        print("\n❌ Erro ao inicializar Brain Middleware")
+_brain_middleware_global: Optional[BrainMiddleware] = None
+
+
+def obter_brain_middleware_global() -> Optional[BrainMiddleware]:
+    """Retorna a instância global do Brain Middleware."""
+    global _brain_middleware_global
+    return _brain_middleware_global
+
+
+def definir_brain_middleware_global(instancia: BrainMiddleware) -> None:
+    """Define a instância global do Brain Middleware."""
+    global _brain_middleware_global
+    _brain_middleware_global = instancia
+    logger_brain.info(f"✅ [GLOBAL] Brain Middleware definido como instância global")
+
+
+# =============================================================================
+# FIM DO ARQUIVO
+# =============================================================================

@@ -1,380 +1,328 @@
 #!/usr/bin/env python3
 """
 ================================================================================
-INICIALIZADOR COMPLETO DO LEX-BRAIN HYBRID (v1.1 - BRAIN MIDDLEWARE READY)
+INICIADOR COMPLETO - LEX-BRAIN HYBRID v3.0 (CORRIGIDO!)
 ================================================================================
 
-Arquitetura Final:
-- MAIN THREAD:   Telegram Bot Polling (obrigatório!)
-- BACKGROUND:    Scheduler System (APScheduler)
-- 🆕 BRAIN:      Brain Middleware IA Assistente (conversação natural)
+AUTOR: Mago-Usamn | DATA: 14/04/2026
+VERSÃO: 3.0 (LLM-First Architecture)
 
-Autor: Lex-Usamn
-Data: 12/04/2026
-Versão: 1.1
-Status: ✅ PRODUÇÃO
+CORREÇÕES DESTA VERSÃO:
+✅ Função helper obter_classe_do_modulo() para extrair classes dos módulos
+✅ Todos os __import__ agora funcionam corretamente
+✅ CoreEngine, Scheduler, Bot, Orchestrator, ContextLoader todos OK!
 ================================================================================
 """
 
 import sys
 import os
-import signal
 import time
-from pathlib import Path
+import logging
+import threading
 
-# ============================================================================
-# CONFIGURAÇÃO DO PATH
-# ============================================================================
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s | %(name)-15s | %(levelname)-8s | %(message)s',
+    datefmt='%H:%M:%S',
+    handlers=[
+        logging.StreamHandler(sys.stdout),
+        logging.FileHandler('logs/iniciador.log', encoding='utf-8')
+    ]
+)
 
-diretorio_raiz = Path(__file__).parent
-sys.path.insert(0, str(diretorio_raiz))
-
-print("=" * 70)
-print("🧠 LEX-BRAIN HYBRID v1.1 - INICIALIZAÇÃO COMPLETA")
-print("   🆕 Brain Middleware (IA Assistente) INCLUÍDO!")
-print("=" * 70)
-print()
-
-# ============================================================================
-# IMPORTAÇÕES
-# ============================================================================
-
-print("📦 Importando módulos...")
-
-try:
-    from engine.core_engine import CoreEngine
-    print("   ✅ CoreEngine")
-except ImportError as e:
-    print(f"   ❌ CoreEngine: {e}")
-    sys.exit(1)
-
-try:
-    from engine.scheduler import SchedulerSystem, APSCHEDULER_AVAILABLE
-    print("   ✅ SchedulerSystem")
-except ImportError as e:
-    print(f"   ❌ SchedulerSystem: {e}")
-    sys.exit(1)
-
-try:
-    from integrations.telegram_bot import LexBrainTelegramBot
-    print("   ✅ LexBrainTelegramBot")
-    telegram_disponivel = True
-except ImportError as e:
-    print(f"   ⚠️ LexBrainTelegramBot: {e}")
-    telegram_disponivel = False
-
-# ============================================================================
-# 🆕 BRAIN MIDDLEWARE (NOVO!)
-# ============================================================================
-
-brain_middleware_disponivel = False
-brain_middleware_instance = None
-
-try:
-    from engine.brain_middleware import BrainMiddleware
-    print("   ✅ BrainMiddleware (IA Assistente)")
-    brain_middleware_disponivel = True
-except ImportError as e:
-    print(f"   ⚠️ BrainMiddleware: {e} (bot usará modo clássico)")
-    brain_middleware_disponivel = False
-
-print()
-
-# ============================================================================
-# VARIÁVEIS GLOBAIS
-# ============================================================================
-
-scheduler_instance = None
-telegram_bot_instance = None
-engine_instance = None
+logger = logging.getLogger("Iniciador")
 
 
-# ============================================================================
-# FUNÇÃO DE INICIALIZAÇÃO (RODA UMA VEZ NO INÍCIO)
-# ============================================================================
+# =============================================================================
+# FUNÇÃO HELPER: Extrair classe de módulo (CORREÇÃO PRINCIPAL!)
+# =============================================================================
 
-def inicializar_tudo():
+def obter_classe_do_modulo(modulo, nome_classe):
     """
-    Inicializa Engine + Scheduler + Brain Middleware.
+    Extrai uma classe de dentro de um módulo importado.
     
-    O Telegram Bot será iniciado DEPOIS na main thread.
-    """
-    global scheduler_instance, telegram_bot_instance, engine_instance
-    global brain_middleware_instance
+    Problema: __import__() retorna o MÓDULO, não a CLASSE.
+    Solução: Usar getattr() para pegar a classe pelo nome.
     
-    # =========================================================================
-    # FASE 1: CORE ENGINE
-    # =========================================================================
-    
-    print("=" * 70)
-    print("🚀 FASE 1: CORE ENGINE")
-    print("=" * 70)
-    
-    try:
-        engine_instance = CoreEngine.obter_instancia()
-        print(f"✅ CoreEngine criado")
+    Args:
+        modulo: O módulo importado via __import__
+        nome_classe: Nome da classe dentro do módulo
         
-        if hasattr(engine_instance, 'lexflow') and engine_instance.lexflow:
-            print(f"✅ Lex Flow: Conectado")
-        else:
-            print(f"⚠️ Lex Flow: Modo degradado")
-            
-    except Exception as e:
-        print(f"❌ Erro fatal no CoreEngine: {e}")
-        return False
+    Returns:
+        A classe solicitada
+        
+    Raises:
+        Exception: Se a classe não for encontrada no módulo
+    """
+    classe = getattr(modulo, nome_classe, None)
     
-    # =========================================================================
-    # FASE 2: SCHEDULER SYSTEM (BACKGROUND)
-    # =========================================================================
-    
-    print()
-    print("=" * 70)
-    print("⏰ FASE 2: SCHEDULER SYSTEM (BACKGROUND)")
-    print("=" * 70)
-    
-    if not APSCHEDULER_AVAILABLE:
-        print("❌ APScheduler não instalado!")
-        return False
-    
-    try:
-        scheduler_instance = SchedulerSystem(
-            engine=engine_instance,
-            timezone_str="America/Sao_Paulo"
+    if classe is None:
+        raise Exception(
+            f"Classe '{nome_classe}' não encontrada no módulo '{modulo.__name__}'"
         )
-        print(f"✅ SchedulerSystem criado")
-        
-        # Inicializar e iniciar o scheduler (roda em background!)
-        scheduler_instance.inicializar()
-        scheduler_instance.iniciar()
-        
-        print(f"✅ Scheduler RODANDO EM BACKGROUND!")
-        print(f"\n📋 Workflows Ativos:")
-        for nome, config in scheduler_instance._workflows.items():
-            if config.ativo:
-                print(f"   ✅ {nome}: {config.tipo_trigger} {config.horario_execucao}")
-        
-    except Exception as e:
-        print(f"❌ Erro no Scheduler: {e}")
-        return False
     
-    # =========================================================================
-    # 🆕 FASE 2.5: BRAIN MIDDLEWARE (IA ASSISTENTE)
-    # =========================================================================
-    
-    print()
-    print("=" * 70)
-    print("🧠 FASE 2.5: BRAIN MIDDLEWARE (IA ASSISTENTE PESSOAL)")
-    print("=" * 70)
-    
-    if brain_middleware_disponivel:
-        try:
-            brain_middleware_instance = BrainMiddleware()
-            
-            sucesso_bm = brain_middleware_instance.inicializar()
-            
-            if sucesso_bm:
-                print(f"✅ BrainMiddleware INICIALIZADO E PRONTO!")
-                print(f"   🤖 IA: GLM5 (NVIDIA NIM)")
-                print(f"   🔍 RAG: TF-IDF + Busca Híbrida")
-                print(f"   💬 Conversação natural ATIVA!")
-                
-                # Injeta o Brain Middleware no bot (se disponível)
-                if telegram_disponivel:
-                    # O bot já vai pegar automaticamente via obter_brain_middleware()
-                    # Mas podemos pré-inicializar aqui para garantir
-                    pass
-                
-            else:
-                print(f"⚠️ BrainMiddleware não conseguiu inicializar")
-                print(f"   (Bot usará modo clássico: /comandos)")
-                brain_middleware_instance = None
-                
-        except Exception as e:
-            print(f"❌ Erro no BrainMiddleware: {e}")
-            print(f"   (Bot usará modo clássico: /comandos)")
-            brain_middleware_instance = None
-    else:
-        print(f"⏭️ BrainMiddleware não disponível (módulo não encontrado)")
-        print(f"   (Bot usará modo clássico: /comandos)")
-    
-    # =========================================================================
-    # FASE 3: TELEGRAM BOT (SÓ CRIA, NÃO INICIA AINDA!)
-    # =========================================================================
-    
-    print()
-    print("=" * 70)
-    print("🤖 FASE 3: TELEGRAM BOT (PREPARAÇÃO)")
-    print("=" * 70)
-    
-    if not telegram_disponivel:
-        print("⚠️ Telegram não disponível")
-        telegram_bot_instance = None
-    else:
-        try:
-            telegram_bot_instance = LexBrainTelegramBot()
-            
-            # Conectar o bot ao scheduler (para envio de mensagens automáticas)
-            scheduler_instance.telegram_bot = telegram_bot_instance
-            
-            status_brain = "🟢 ATIVO (Conversação Natural)" if brain_middleware_instance else "⚠️ Modo Clássico"
-            
-            print(f"✅ @Lex_Cerebro_bot criado e conectado ao Scheduler!")
-            print(f"🧠 Brain Middleware: {status_brain}")
-            print(f"💡 O bot será iniciado na main thread (próximo passo)")
-            
-        except Exception as e:
-            print(f"⚠️ Erro ao criar bot: {e}")
-            telegram_bot_instance = None
-    
-    return True
+    return classe
 
-
-# ============================================================================
-# PONTO DE ENTRADA PRINCIPAL
-# ============================================================================
 
 def main():
-    """
-    Função principal.
+    tempo_inicio = time.time()
     
-    Ordem de execução:
-    1. Inicializar Engine + Scheduler + Brain MW (rápido)
-    2. Iniciar Telegram Bot na MAIN THREAD (bloqueia aqui!)
-    """
-    inicio_total = time.time()
+    print("\n" + "=" * 60)
+    print("   LEX-BRAIN HYBRID v3.0 - INICIALIZAÇÃO COMPLETA")
+    print("   Nova Arquitetura: LLM-FIRST (IA Conversacional Real)")
+    print("=" * 60 + "\n")
     
-    print()
-    print(f"🕐 Início: {time.strftime('%d/%m/%Y %H:%M:%S')}")
-    print()
+    # ========================================
+    # FASE 0: IMPORTAR MÓDULOS
+    # ========================================
+    print("=" * 60)
+    print(" FASE 0: IMPORTANDO MÓDULOS...")
+    print("=" * 60)
     
-    # -------------------------------------------------------------------------
-    # PASSO 1: Inicializar tudo (Engine + Scheduler + Brain MW)
-    # -------------------------------------------------------------------------
+    modulos = {}
     
-    sucesso = inicializar_tudo()
+    lista_modulos = [
+        ("CoreEngine", "engine.core_engine", "CoreEngine"),
+        ("SchedulerSystem", "engine.scheduler", "SchedulerSystem"),
+        ("LexBrainTelegramBot", "integrations.telegram_bot", "LexBrainTelegramBot"),
+        ("BrainLLMOrchestrator", "engine.brain_llm_orchestrator", "BrainLLMOrchestrator"),
+        ("BrainContextLoader", "engine.brain_context_loader", "BrainContextLoader"),
+    ]
     
-    if not sucesso:
-        print("\n❌ FALHA NA INICIALIZAÇÃO")
+    for nome, caminho, nome_classe in lista_modulos:
+        try:
+            modulo = __import__(caminho, fromlist=[nome])
+            classe = obter_classe_do_modulo(modulo, nome_classe)
+            modulos[nome] = classe  # Armazena a CLASSE, não o módulo!
+            print(f"   [OK] {nome}")
+            
+        except Exception as e:
+            print(f"   [ERRO] {nome}: {e}")
+            logger.error(f"Erro importando {nome}: {e}", exc_info=True)
+    
+    # ========================================
+    # FASE 1: CORE ENGINE
+    # ========================================
+    print("\n" + "=" * 60)
+    print(" FASE 1: CORE ENGINE")
+    print("=" * 60)
+    
+    engine = None
+    
+    try:
+        ClasseCore = modulos.get("CoreEngine")
+        if not ClasseCore:
+            raise Exception("CoreEngine não foi importado")
+        
+        engine = ClasseCore.obter_instancia()
+        print("   [OK] CoreEngine criado")
+        
+        lexflow_status = "CONECTADO" if engine.lexflow else "ERRO"
+        print(f"   [INFO] LexFlow: {lexflow_status}")
+        
+    except Exception as e:
+        print(f"   [ERRO FATAL] {e}")
+        logger.critical(f"Erro no CoreEngine: {e}", exc_info=True)
         sys.exit(1)
     
-    # -------------------------------------------------------------------------
-    # PASSO 2: Iniciar Telegram Bot na MAIN THREAD
-    # -------------------------------------------------------------------------
+    # ========================================
+    # FASE 2: SCHEDULER (BACKGROUND)
+    # ========================================
+    print("\n" + "=" * 60)
+    print(" FASE 2: SCHEDULER SYSTEM (BACKGROUND)")
+    print("=" * 60)
     
-    if telegram_bot_instance:
-        print()
-        print("=" * 70)
-        print("🤖 INICIANDO TELEGRAM BOT (MAIN THREAD)")
-        print("=" * 70)
-        print()
-        print("✅ TUDO PRONTO!")
-        print()
-        print("📱 @Lex_Cerebro_bot está ONLINE e OUVINDO!")
-        print()
+    try:
+        ClasseScheduler = modulos.get("SchedulerSystem")
         
-        if brain_middleware_instance:
-            print("🧠 *BRAIN MIDDLEWARE ATIVO!*")
-            print("   → Conversação natural HABILITADA!")
-            print("   → 'Lex, anota isso' → ✅ Nota criada")
-            print("   → 'Lex, lembra que tenho que...' → ✅ Tarefa")
-            print("   → 'Lex, o que eu escrevi sobre...?' → 🔍 Busca RAG + IA")
-            print()
-            
-            # ============================================================
-            # 🔥🔥🔥 INJETAR INSTÂNCIA NO BOT (SINGLETON COMPARTILHADO)
-            # ============================================================
-            try:
-                from integrations.telegram_bot import definir_brain_middleware_global
-                
-                definir_brain_middleware_global(brain_middleware_instance)
-                print("🔗 Brain Middleware injetado no Telegram Bot (Singleton ativo)")
-                
-            except Exception as e_injecao:
-                print(f"⚠️ Aviso: Não foi possível injetar Brain MW no bot: {e_injecao}")
-                print("   O bot criará sua própria instância (lazy init)")
-        
+        if ClasseScheduler:
+            scheduler = ClasseScheduler(engine)
+            scheduler_thread = threading.Thread(
+                target=scheduler.iniciar, daemon=True
+            )
+            scheduler_thread.start()
+            print("   [OK] Scheduler RODANDO EM BACKGROUND!")
+            time.sleep(0.5)
         else:
-            print("⚠️ Brain Middleware não disponível (modo clássico)")
+            print("   [AVISO] Scheduler não disponível (opcional)")
+            
+    except Exception as e:
+        print(f"   [AVISO] Erro Scheduler (não fatal): {e}")
+        logger.warning(f"Erro no Scheduler: {e}")
+    
+    # ========================================
+    # FASE 2.5: BRAIN LLM ORCHESTRATOR v3.0 (CORRIGIDA!)
+    # ========================================
+    print("\n" + "=" * 60)
+    print(" FASE 2.5: BRAIN LLM ORCHESTRATOR v3.0 (NOVO!)")
+    print("=" * 60)
+    
+    orchestrator = None
+    
+    try:
+        ClasseOrchestrator = modulos.get("BrainLLMOrchestrator")
+        ClasseLoader = modulos.get("BrainContextLoader")
         
-        print()
-        print("   → Envie /start para começar")
-        print("   → Comandos: /ajuda /status /projetos /hoje /nota /tarefa")
-        print()
+        if not ClasseOrchestrator:
+            raise Exception("BrainLLMOrchestrator não importado")
         
-        print("   → Envie /start para começar")
-        print("   → Comandos: /ajuda /status /projetos /hoje /nota /tarefa")
-        print()
-        print("⏰ Workflows automáticos ativos:")
-        print("   • Morning Briefing:    06:00 (Seg-Sex)")
-        print("   • Midday Check-in:     12:00 (Seg-Sex)")
-        print("   • Evening Reflection:  20:00 (Todos dias)")
-        print("   • TELOS Review:        Domingo 20:00")
-        print("   • Heartbeat:           A cada 30 min")
-        print()
-        print("-" * 70)
-        print("⌨️  Pressione Ctrl+C para encerrar gracefulmente")
-        print("-" * 70)
+        # --- Inicializar Context Loader ---
+        print("   [1/3] Inicializando Context Loader (.md files)...")
         
-        # Calcular tempo de boot
-        tempo_boot = time.time() - inicio_total
-        print(f"\n⏱️ Tempo de boot: {tempo_boot:.2f} segundos")
-        print()
+        context_loader = None
         
-        # ✅ INICIAR O POLLING DO TELEGRAM NA MAIN THREAD!
-        try:
-            telegram_bot_instance.iniciar()  # ← BLOQUEIA AQUI!
-        except KeyboardInterrupt:
-            print("\n\n⛔ Ctrl+C recebido...")
-        except Exception as e:
-            print(f"\n❌ Erro no Telegram Bot: {e}")
-    
-    else:
-        # Sem Telegram - só mostrar status do scheduler
-        print()
-        print("=" * 70)
-        print("⚠️ MODO: SCHEDULER SEM TELEGRAM")
-        print("=" * 70)
-        print("\n✅ Scheduler rodando em background!")
-        print("⌨️  Pressione Ctrl+C para encerrar")
+        if ClasseLoader:
+            context_loader = ClasseLoader()
+            
+            arquivos_ok = context_loader.verificar_arquivos_existem()
+            for nome, existe in arquivos_ok.items():
+                status = "[OK]" if existe else "[AUSENTE]"
+                print(f"          {status} {nome.upper()}.md")
+            
+            print("   [2/3] Carregando contextos...")
+            contextos = context_loader.carregar_todos(forcar_reload=True)
+            
+            for nome, conteudo in contextos.items():
+                tamanho = len(conteudo)
+                print(f"          {nome.upper()}: {tamanho} chars")
+            
+            from engine.brain_context_loader import definir_context_loader_global
+            definir_context_loader_global(context_loader)
+            
+        else:
+            print("   [AVISO] Context Loader não disponível")
         
-        try:
-            while True:
-                time.sleep(60)
-                hora = time.strftime("%H:%M:%S")
-                total = sum(w.contador_execucoes for w in scheduler_instance._workflows.values())
-                print(f"[{hora}] 💓 Scheduler ativo | Execuções: {total}")
-        except KeyboardInterrupt:
-            print("\n\n⛔ Ctrl+C recebido...")
+        # --- Inicializar Orquestrador ---
+        print("   [3/3] Conectando no LLM (GLM5/NVIDIA)...")
+        
+        orchestrator = ClasseOrchestrator()
+        
+        # 🔧 CORREÇÃO v3.0.1: Obter llm_client com fallback!
+        llm_client = getattr(engine, 'llm_client', None)
+        rag_system = getattr(engine, 'sistema_rag', None)
+        lexflow_client = getattr(engine, 'lexflow', None)
+        
+        # 🔑 Se llm_client não existir no engine, criar um novo!
+        if not llm_client:
+            print("   [⚠️] engine.llm_client não disponível, criando novo...")
+            
+            # Tentar obter API key do ambiente
+            nvidia_key = os.getenv("OPENAI_API_KEY") or os.getenv("NVIDIA_API_KEY")
+            
+            if nvidia_key:
+                from engine.llm_client import LLMClient, ProvedorLLM, criar_llm_nvidia
+                
+                llm_client = criar_llm_nvidia(
+                    api_key=nvidia_key,
+                    modelo="z-ai/glm5"
+                )
+                print(f"   ✅ Novo LLMClient criado! (key: {nvidia[:8]}...{nvidia[-4:]})")
+                
+            else:
+                print("   ❌ Nenhuma API key encontrada!")
+                print("      Tente: export OPENAI_API_KEY='sua-chave'")
+                print("      Ou: export NVIDIA_API_KEY='sua-chave'")
+        
+        sucesso = orchestrator.inicializar(
+            llm_client=llm_client,
+            rag_system=rag_system,
+            lexflow_client=lexflow_client,
+            context_loader=context_loader
+        )
+        
+        if sucesso:
+            from engine.brain_llm_orchestrator import definir_orchestrator_global
+            definir_orchestrator_global(orchestrator)
+            
+            print("")
+            print("   *** ORQUESTRADOR LLM PRONTO! ***")
+            print("       Modo: LLM-FIRST (IA Conversacional Real)")
+            
+            stats = orchestrator.obter_estatisticas()
+            
+            print("")
+            print("   ESTATÍSTICAS DO CÉREBRO:")
+            print(f"       Versão: {stats['versao']}")
+            print(f"       Modo: {stats['modo']}")
+            print("       Recursos:")
+            print(f"           - LLM (GLM5): {'SIM' if stats['recursos']['llm'] else 'NAO'}")
+            print(f"           - RAG System: {'SIM' if stats['recursos']['rag'] else 'NAO'}")
+            print(f"           - Lex Flow: {'SIM' if stats['recursos']['lexflow'] else 'NAO'}")
+            
+            if stats.get('contextos_carregados'):
+                print("")
+                print("       CONTEXTOS CARREGADOS:")
+                for ctx_nome, ctx_tamanho in stats['contextos_carregados'].items():
+                    print(f"           - {ctx_nome.upper()}: {ctx_tamanho} chars")
+            
+        else:
+            print("   [ERRO] Falha ao inicializar orquestrador!")
+            
+    except Exception as e:
+        print(f"   [ERRO] Falha no Orquestrador: {e}")
+        logger.critical(f"Erro no Orquestrador v3.0: {e}", exc_info=True)
+        print("")
+        print("   [AVISO] O bot vai funcionar SEM IA conversacional (modo legacy)")
     
-    # -------------------------------------------------------------------------
-    # DESLIGAMENTO
-    # -------------------------------------------------------------------------
+    tempo_parcial = time.time() - tempo_inicio
+    print(f"\n   Tempo de boot (cérebros): {tempo_parcial:.2f} segundos")
     
-    print()
-    print("=" * 70)
-    print("⛔ DESLIGANDO SISTEMA")
-    print("=" * 70)
+    # ========================================
+    # FASE 3: TELEGRAM BOT (MAIN THREAD)
+    # ========================================
+    print("\n" + "=" * 60)
+    print(" FASE 3: TELEGRAM BOT (MAIN THREAD)")
+    print("=" * 60)
     
-    if scheduler_instance:
-        try:
-            scheduler_instance.parar()
-            print("✅ Scheduler parado")
-        except Exception as e:
-            print(f"⚠️ Erro ao parar scheduler: {e}")
-    
-    tempo_total = time.time() - inicio_total
-    horas = int(tempo_total // 3600)
-    minutos = int((tempo_total % 3600) // 60)
-    
-    print()
-    print(f"⏱️ Tempo total de execução: {horas}h {minutos}m")
-    print("👋 Até logo, Lex! 🧠💤")
-    print()
+    try:
+        ClasseBot = modulos.get("LexBrainTelegramBot")
+        
+        if not ClasseBot:
+            raise Exception("TelegramBot não foi importado")
+        
+        token = os.environ.get('TELEGRAM_BOT_TOKEN')
+        
+        if not token:
+            print("   [ERRO] TELEGRAM_BOT_TOKEN não encontrado!")
+            print("   Execute: export TELEGRAM_BOT_TOKEN=seu_token_aqui")
+            sys.exit(1)
+        
+        bot = ClasseBot()  # Agora funciona!
+        
+        if hasattr(bot, 'definir_engine'):
+            bot.definir_engine(engine)
+        
+        # Injetar orquestrador v3.0
+        if orchestrator and hasattr(bot, 'inicializar_orchestrator_v3'):
+            bot.inicializar_orchestrator_v3(orchestrator)
+            print("   [OK] Orquestrador v3.0 injetado no Bot!")
+        else:
+            print("   [AVISO] Orquestrador v3.0 não disponível")
+        
+        print("")
+        print("+" * 60)
+        print("")
+        bot_username = getattr(bot, 'username', None) or 'Lex_Cerebro_bot'
+        print(f"   >>> @{bot_username} está ONLINE e OUVINDO!")
+        print("")
+        print("   BRAIN LLM ORCHESTRATOR v3.0 ATIVO!")
+        print("      -> IA Conversacional HABILITADA (GLM5/NVIDIA)")
+        print("      -> Contextos .md CARREGADOS (SOUL, USER, MEMORY, HEARTBEAT)")
+        print("      -> Decisões INTELIGENTES (não mais regex!)")
+        print("")
+        print("+" * 60)
+        print("")
+        
+        bot.iniciar()
+        
+    except KeyboardInterrupt:
+        print("\n\n   Bot encerrado pelo usuário (Ctrl+C)")
+        
+    except Exception as e:
+        print(f"\n   [ERRO FATAL] no Bot: {e}")
+        logger.critical(f"Erro no TelegramBot: {e}", exc_info=True)
+        sys.exit(1)
 
-
-# ============================================================================
-# EXECUÇÃO
-# ============================================================================
 
 if __name__ == "__main__":
     main()

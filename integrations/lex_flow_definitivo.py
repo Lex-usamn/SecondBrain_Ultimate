@@ -448,6 +448,234 @@ class LexFlowClient:
         
         return result
     
+    def delete_note(self, note_id: int) -> bool:
+        """
+        Deleta uma nota/quick note pelo ID.
+        
+        Args:
+            note_id: ID da nota a deletar
+            
+        Returns:
+            True se deletou com sucesso, False caso contrário
+        """
+        try:
+            self.logger.info(f"🗑️ Deletando nota ID={note_id}...")
+            
+            resultado = self._request('DELETE', f'/quicknotes/{note_id}')
+            
+            # Verificar se deletou
+            if resultado is not None:
+                self.logger.info(f"✅ Nota ID={note_id} deletada com sucesso!")
+                return True
+            else:
+                self.logger.warning(f"⚠️ Resposta vazia ao deletar ID={note_id}")
+                return False
+                
+        except Exception as e:
+            self.logger.error(f"❌ Erro deletando nota ID={note_id}: {e}")
+            return False
+
+    def listar_areas(self) -> List[Dict]:
+        """
+        Lista todas as áreas (P.A.R.A) disponíveis.
+        
+        Returns:
+            Lista de dicts com áreas ou lista vazia
+        """
+        try:
+            log.info("📋 Listando áreas (P.A.R.A)...")
+            resultado = self._request('GET', '/areas/')
+            
+            if resultado and isinstance(resultado, list):
+                log.info(f"✅ Encontradas {len(resultado)} área(s)")
+                return resultado
+            elif isinstance(resultado, dict):
+                # Tentar extrair de chave 'areas' ou 'data'
+                areas = resultado.get('areas', resultado.get('data', []))
+                if isinstance(areas, list):
+                    log.info(f"✅ Encontradas {len(areas)} área(s) (via dict)")
+                    return areas
+            
+            log.warning(f"⚠️ Resposta inválida ao listar áreas: {resultado}")
+            return []
+                
+        except Exception as e:
+            log.error(f"❌ Erro listando áreas: {e}")
+            return []
+    
+    def listar_projetos(self) -> List[Dict]:
+        """
+        Lista todos os projetos disponíveis.
+        
+        Returns:
+            Lista de dicts com projetos ou lista vazia
+        """
+        try:
+            log.info("📋 Listando projetos...")
+            
+            # Tentar endpoint de colaboração primeiro
+            resultado = self._request('GET', '/collaboration/projects')
+            
+            if not resultado:
+                # Fallback: endpoint alternativo
+                resultado = self._request('GET', '/projects')
+            
+            # A API pode retornar dict com chave 'projects' ou lista direto
+            if isinstance(resultado, dict):
+                projetos = resultado.get('projects', resultado.get('data', []))
+            elif isinstance(resultado, list):
+                projetos = resultado
+            else:
+                projetos = []
+            
+            log.info(f"✅ Encontrados {len(projetos)} projeto(s)")
+            return projetos
+            
+        except Exception as e:
+            log.error(f"❌ Erro listando projetos: {e}")
+            return []
+    
+    def buscar_area_por_nome(self, nome: str) -> Optional[Dict]:
+        """
+        Busca área pelo nome (case-insensitive).
+        
+        Args:
+            nome: Nome da área (ex: "Academia", "Desenvolvimento Pessoal")
+            
+        Returns:
+            Dict com dados da área ou None se não encontrar
+        """
+        areas = self.listar_areas()
+        nome_lower = nome.lower().strip()
+        
+        for area in areas:
+            nome_area = area.get('name', '').lower()
+            if nome_area == nome_lower:
+                log.info(f"✅ Área encontrada: {area.get('name')} (ID={area.get('id')})")
+                return area
+        
+        log.warning(f"⚠️ Área '{nome}' não encontrada")
+        return None
+    
+    def buscar_projeto_por_nome(self, nome: str) -> Optional[Dict]:
+        """
+        Busca projeto pelo nome (case-insensitive).
+        
+        Args:
+            nome: Nome do projeto (ex: "Canal Dark", "4Live")
+            
+        Returns:
+            Dict com dados do projeto ou None se não encontrar
+        """
+        projetos = self.listar_projetos()
+        nome_lower = nome.lower().strip()
+        
+        for projeto in projetos:
+            nome_projeto = projeto.get('name', projeto.get('title', '')).lower()
+            if nome_projeto == nome_lower:
+                log.info(f"✅ Projeto encontrado: {projeto.get('name')} (ID={projeto.get('id')})")
+                return projeto
+        
+        log.warning(f"⚠️ Projeto '{nome}' não encontrado")
+        return None
+    
+    def mover_nota_para_area(self, nota_id: int, area_id: int) -> bool:
+        """
+        Move uma nota para uma área (P.A.R.A).
+        
+        Args:
+            nota_id: ID da nota
+            area_id: ID da área de destino
+            
+        Returns:
+            True se moveu com sucesso
+        """
+        try:
+            log.info(f"📂 Movendo nota {nota_id} para área {area_id}...")
+            
+            # Usar PATCH (atualização parcial)
+            resultado = self._request(
+                'PATCH',
+                f'/quicknotes/{nota_id}',
+                json={"area_id": area_id, "project_id": None}
+            )
+            
+            if resultado:
+                log.info(f"✅ Nota movida para área!")
+                return True
+            else:
+                log.warning(f"⚠️ Resposta vazia ao mover nota")
+                return False
+                
+        except Exception as e:
+            log.error(f"❌ Erro movendo nota para área: {e}")
+            return False
+    
+    def mover_nota_para_projeto(self, nota_id: int, projeto_id: int) -> bool:
+        """
+        Move uma nota para um projeto.
+        
+        Args:
+            nota_id: ID da nota
+            projeto_id: ID do projeto de destino
+            
+        Returns:
+            True se moveu com sucesso
+        """
+        try:
+            log.info(f"📁 Movendo nota {nota_id} para projeto {projeto_id}...")
+            
+            resultado = self._request(
+                'PATCH',
+                f'/quicknotes/{nota_id}',
+                json={"project_id": projeto_id, "area_id": None}
+            )
+            
+            if resultado:
+                log.info(f"✅ Nota movida para projeto!")
+                return True
+            else:
+                log.warning(f"⚠️ Resposta vazia ao mover nota")
+                return False
+                
+        except Exception as e:
+            log.error(f"❌ Erro movendo nota para projeto: {e}")
+            return False
+    
+    def converter_nota_em_tarefa_com_projeto(self, nota_id: int, projeto_id: int) -> Optional[Dict]:
+        """
+        Converte nota em tarefa E move para projeto em uma operação.
+        
+        Args:
+            nota_id: ID da nota a converter
+            projeto_id: ID do projeto de destino
+            
+        Returns:
+            Dict com dados da tarefa criada ou None
+        """
+        try:
+            log.info(f"🔄 Convertendo nota {nota_id} em tarefa do projeto {projeto_id}...")
+            
+            # Usar endpoint de conversão se existir
+            resultado = self._request(
+                'POST',
+                f'/quicknotes/{nota_id}/convert-to-task',
+                json={"project_id": projeto_id}
+            )
+            
+            if resultado:
+                log.info(f"✅ Nota convertida em tarefa!")
+                return resultado
+            else:
+                log.warning(f"⚠️ Resposta vazia ao converter")
+                return None
+                
+        except Exception as e:
+            log.error(f"❌ Erro convertendo nota: {e}")
+            return None
+
+
+    
     def update_note(self, note_id: int, title: str = None,
                      content: str = None, tags: List[str] = None) -> bool:
         """Atualiza anotação existente"""

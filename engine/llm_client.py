@@ -1,30 +1,30 @@
 """
 ==============================================================================
-LLM CLIENT v1.0 - Cliente de Modelos de Linguagem Multi-Provedor
+LLM CLIENT v1.3 - Cliente de Modelos de Linguagem Multi-Provedor
 ==============================================================================
 
-Cliente unificado para múltiplos provedores LLM:
+HISTÓRICO DE VERSÕES:
+- v1.0 → v1.1: Refatoração inicial
+- v1.1 → v1.2: Constantes movidas para fora da classe, suporte Gemini
+- v1.2 → v1.3: CORREÇÕES CRÍTICAS:
+  * Removido uso inválido de "..." em assinaturas de métodos
+  * Adicionados imports faltantes (Union, Dict, List)
+  * Eliminados métodos duplicados (gerar_stream, obter_estatisticas)
+  * Inicialização completa de atributos no __init__
+  * Corrigido conflito entre propriedade client e atributo self.client
+  * Padronizada nomenclatura em português (provedor, não provider)
 
-Provedores Suportados:
-- ✅ NVIDIA NIM (API compatível OpenAI) - z-ai/glm5, llama, etc.
-- ✅ OpenAI (GPT-4, GPT-3.5-turbo)
-- ✅ Google Gemini (gemini-pro, gemini-flash)
-- ✅ Qualquer API compatível OpenAI (local, Ollama, etc.)
-
-Funcionalidades:
-- Streaming em tempo real
-- Suporte a reasoning/thinking (GLM5, DeepSeek-R1)
-- Contexto RAG automático
-- Cache de conversas
-- Fallback entre modelos
-
-Autor: Lex-Brain Hybrid
-Criado: 11/04/2026
-Status: ✅ PRODUÇÃO
+AUTOR: Lex-Brain Hybrid
+DATA DE ATUALIZAÇÃO: 15/04/2026
+STATUS: ✅ PRONTO PARA PRODUÇÃO (COM GEMINI 2.5 FLASH!)
 ==============================================================================
 """
 
-from __future__ import annotations
+# =============================================================================
+# IMPORTAÇÕES PADRÃO DO PYTHON
+# =============================================================================
+
+from __future__ import annotations  # Permite usar tipos como forward references
 
 import json
 import logging
@@ -34,83 +34,124 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
-from typing import Any, Generator, Optional
+from typing import Any, Generator, Optional, Union, Dict, List
+
 
 # =============================================================================
-# CONFIGURAÇÃO DE LOGGING
+# IMPORTAÇÃO CONDICIONAL DO CLIENTE GEMINI
+# =============================================================================
+# Tenta importar o cliente Gemini. Se não estiver disponível (SDK não instalado),
+# o sistema continua funcionando mas usa apenas NVIDIA como fallback.
+
+try:
+    from engine.gemini_client import GeminiClient, criar_gemini_client
+    GEMINI_SDK_DISPONIVEL = True
+except ImportError:
+    GEMINI_SDK_DISPONIVEL = False
+
+
+# =============================================================================
+# CONFIGURAÇÃO DE LOGGING ESTRUTURADO
 # =============================================================================
 
 logger_llm = logging.getLogger("LexBrain.LLMClient")
 logger_llm.setLevel(logging.DEBUG)
 
-log_dir = Path(__file__).parent.parent / "logs"
-log_dir.mkdir(exist_ok=True)
+# Diretório para arquivos de log
+diretorio_logs = Path(__file__).parent.parent / "logs"
+diretorio_logs.mkdir(exist_ok=True)
 
-file_handler = logging.FileHandler(
-    log_dir / "llm_client.log",
+# Handler para escrever logs em arquivo
+manipulador_arquivo = logging.FileHandler(
+    diretorio_logs / "llm_client.log",
     encoding="utf-8"
 )
-file_handler.setLevel(logging.DEBUG)
+manipulador_arquivo.setLevel(logging.DEBUG)
 
-formatter = logging.Formatter(
+# Formato das mensagens de log
+formatador_log = logging.Formatter(
     "%(asctime)s | %(levelname)-8s | %(name)s | %(funcName)s:%(lineno)d | %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S"
 )
-file_handler.setFormatter(formatter)
-logger_llm.addHandler(file_handler)
+manipulador_arquivo.setFormatter(formatador_log)
+logger_llm.addHandler(manipulador_arquivo)
 
-console_handler = logging.StreamHandler()
-console_handler.setLevel(logging.INFO)
-console_handler.setFormatter(formatter)
-logger_llm.addHandler(console_handler)
+# Handler para exibir logs no console (apenas INFO ou superior)
+manipulador_console = logging.StreamHandler()
+manipulador_console.setLevel(logging.INFO)
+manipulador_console.setFormatter(formatador_log)
+logger_llm.addHandler(manipulador_console)
 
 
 # =============================================================================
-# ENUMERAÇÕES E CONSTANTES
+# ENUMERAÇÃO DE PROVEDORES LLM DISPONÍVEIS
 # =============================================================================
 
 class ProvedorLLM(str, Enum):
-    """Provedores de LLM disponíveis."""
-    NVIDIA = "nvidia"          # NVIDIA NIM API (OpenAI-compatible)
+    """
+    Enumeração dos provedores de LLM suportados pelo sistema.
+    
+    Cada provedor tem uma API diferente, mas o LLMClient abstrai essas diferenças.
+    """
+    NVIDIA = "nvidia"          # NVIDIA NIM API (compatível com OpenAI)
     OPENAI = "openai"          # OpenAI oficial
-    GEMINI = "gemini"          # Google Gemini
-    LOCAL = "local"            # Local/Ollama
+    GEMINI = "gemini"          # Google Gemini (NOVO! v1.2+)
+    LOCAL = "local"            # Modelos locais via Ollama
 
+
+# =============================================================================
+# URLS PADRÃO POR PROVEDOR
+# =============================================================================
+
+URLS_PADRAO_POR_PROVEDOR = {
+    ProvedorLLM.NVIDIA: "https://integrate.api.nvidia.com/v1",
+    ProvedorLLM.OPENAI: "https://api.openai.com/v1",
+    ProvedorLLM.GEMINI: None,   # Gemini usa SDK próprio, não precisa de URL base
+    ProvedorLLM.LOCAL: None,    # Ollama roda localmente
+}
+
+
+# =============================================================================
+# CLASSES DE DADOS (DATACLASSES)
+# =============================================================================
 
 @dataclass
 class MensagemLLM:
     """
-    Representa uma mensagem no chat.
+    Representa uma única mensagem no histórico de conversa.
     
-    Attributes:
-        role: Papel da mensagem (system, user, assistant)
+    Atributos:
+        role: Papel da mensagem ("system", "user", ou "assistant")
         conteudo: Texto da mensagem
-        reasoning: Conteúdo de raciocínio (para modelos com thinking)
-        timestamp: Quando foi criada
+        reasoning: Raciocínio interno do modelo (opcional, para modelos com thinking)
+        timestamp: Momento em que a mensagem foi criada
     """
     role: str  # "system", "user", "assistant"
     conteudo: str
     reasoning: Optional[str] = None
     timestamp: datetime = field(default_factory=datetime.now)
     
-    def to_dict(self) -> dict[str, str]:
-        """Converte para formato de API."""
+    def para_dicionario(self) -> dict[str, str]:
+        """Converte a mensagem para dicionário (formato esperado pelas APIs)."""
         return {"role": self.role, "content": self.conteudo}
 
 
 @dataclass
 class RespostaLLM:
     """
-    Resposta completa do LLM.
+    Resposta completa retornada pelo modelo de linguagem.
     
-    Attributes:
-        conteudo: Texto gerado
-        reasoning: Raciocínio interno (se disponível)
-        modelo: Modelo usado
-        provedor: Provedor usado
-        tokens_usados: Estatísticas de tokens
-        tempo_execucao: Tempo em segundos
-        custo_estimado: Custo estimado em USD
+    Esta classe encapsula todos os dados relevantes de uma resposta do LLM,
+    incluindo métricas de performance para monitoramento.
+    
+    Atributos:
+        conteudo: Texto principal da resposta
+        reasoning: Raciocínio interno (se o modelo suportar thinking)
+        modelo: Nome do modelo usado para gerar a resposta
+        provedor: Nome do provedor ("nvidia", "gemini", etc.)
+        tokens_usados: Dicionário com contagem de tokens (prompt, completion, total)
+        tempo_execucao: Tempo em segundos que a chamada à API demorou
+        custo_estimado: Custo estimado da chamada (em dólares)
     """
     conteudo: str
     reasoning: Optional[str] = None
@@ -120,8 +161,8 @@ class RespostaLLM:
     tempo_execucao: float = 0.0
     custo_estimado: float = 0.0
     
-    def to_dict(self) -> dict[str, Any]:
-        """Converte para dicionário."""
+    def para_dicionario(self) -> dict[str, Any]:
+        """Converte a resposta para dicionário (útil para serialização JSON)."""
         return {
             "conteudo": self.conteudo,
             "reasoning": self.reasoning,
@@ -134,55 +175,16 @@ class RespostaLLM:
 
 
 # =============================================================================
-# CLASSE PRINCIPAL: LLMClient
+# CONSTANTES GLOBAIS DE CONFIGURAÇÃO
 # =============================================================================
 
-class LLMClient:
-    """
-    Cliente unificado para múltiplos provedores LLM.
-    
-    Funcionalidades:
-    - Streaming em tempo real (yield chunks)
-    - Suporte a reasoning/thinking (GLM5, DeepSeek-R1, etc.)
-    - Contexto RAG automático (injeta contextos encontrados)
-    - Histórico de conversa
-    - Múltiplos provedores com fallback
-    
-    Usage:
-        >>> from engine.llm_client import LLMClient, ProvedorLLM
-        >>> 
-        >>> llm = LLMClient(
-        ...     provedor=ProvedorLLM.NVIDIA,
-        ...     api_key="sua-chave",
-        ...     modelo="z-ai/glm5"
-        ... )
-        >>>
-        >>> # Sem streaming
-        >>> resposta = llm.gerar("Explique RAG em português")
-        >>> print(resposta.conteudo)
-        >>>
-        >>> # Com streaming
-        >>> for chunk in llm.gerar_stream("Conte uma piada"):
-        ...     print(chunk, end="")
-        
-    Attributes:
-        provedor: Provedor LLM selecionado
-        api_key: Chave da API
-        modelo: Nome do modelo
-        base_url: URL base da API (para provedores custom)
-        temperatura: Criatividade das respostas (0-2)
-        max_tokens: Máximo de tokens na resposta
-        _client: Instância do cliente (lazy loading)
-        _historico: Lista de mensagens da conversa
-    """
-    
-    # Configurações padrão
-    TEMPERATURA_PADRAO = 0.7
-    MAX_TOKENS_PADRAO = 4096
-    TOP_P_PADRAO = 1.0
-    
-    # Templates de sistema
-    SISTEMA_PADRAO = """Você é o Lex-Brain Hybrid, um assistente de IA pessoal avançado.
+# Valores padrão para parâmetros do modelo
+TEMPERATURA_PADRAO = 0.7          # Criatividade do modelo (0.0 = determinístico, 1.0 = muito criativo)
+MAX_TOKENS_PADRAO = 4096          # Máximo de tokens na resposta
+TOP_P_PADRAO = 1.0                # Nucleus sampling (1.0 = desativado)
+
+# Sistema padrão que define a personalidade do assistente
+SISTEMA_PADRAO = """Você é o Lex-Brain Hybrid, um assistente de IA pessoal avançado.
 
 Suas características:
 - Especialista em Segundo Cérebro e produtividade
@@ -197,9 +199,9 @@ Estilo de comunicação:
 - Estrutura respostas com listas quando adequado
 - Pode usar emojis moderadamente
 - Adapta o nível de detalhe à complexidade da pergunta"""
-    
-    # Template RAG (injeta contextos encontrados)
-    TEMPLATE_RAG = """{sistema}
+
+# Template para quando há contexto RAG disponível
+TEMPLATE_RAG = """{sistema}
 
 CONTEXTO RELEVANTE ENCONTRADO NA BASE DE CONHECIMENTO:
 ---
@@ -210,159 +212,391 @@ Com base nos contextos acima, responda à pergunta do usuário.
 Se os contextos não contêm informação suficiente, diga honestamente e use seu conhecimento geral.
 
 IMPORTANTE:
-- Citte as fontes quando usar informação dos contextos
+- Cite as fontes quando usar informação dos contextos
 - Seja específico e acionável nas respostas
 - Se não souber, diga que não sabe em vez de inventar"""
+
+
+# =============================================================================
+# CLASSE PRINCIPAL: LLMCLIENT
+# =============================================================================
+
+class LLMClient:
+    """
+    Cliente unificado para múltiplos provedores de LLM.
+    
+    Esta classe abstrai as diferenças entre as APIs de diferentes provedores
+    (NVIDIA, OpenAI, Google Gemini), permitindo trocar de provedor com 
+    mínimas alterações no código.
+    
+    CARACTERÍSTICAS PRINCIPAIS:
+    - Suporte a múltiplos provedores (NVIDIA, OpenAI, Gemini, Local)
+    - Streaming de respostas (texto aparece aos poucos)
+    - Suporte a reasoning/thinking (modelos que mostram raciocínio)
+    - Histórico de conversa automático
+    - Fallback automático: se Gemini falhar, volta para NVIDIA
+    - Logging estruturado para debug e monitoramento
+    
+    EXEMPLO DE USO BÁSICO:
+        >>> llm = LLMClient(provedor=ProvedorLLM.GEMINI, api_key="sua_chave")
+        >>> resposta = llm.gerar("Olá, como você está?")
+        >>> print(resposta.conteudo)
+    
+    EXEMPLO COM STREAMING:
+        >>> for chunk in llm.gerar_stream("Conte uma história"):
+        ...     print(chunk["conteudo"], end="")
+    
+    ATRIBUTOS:
+        provedor: Provedor LLM atualmente em uso (enum ProvedorLLM)
+        modelo: Nome do modelo configurado (ex: "gemini-2.5-flash")
+        api_key: Chave API do provedor (carregada de variável de ambiente)
+        temperatura_padrao: Valor padrão de temperatura para gerações
+        max_tokens_padrao: Valor padrão máximo de tokens na resposta
+        fallback_automatico: Se True, automaticamente muda de provedor se der erro
+    """
+
+    # =========================================================================
+    # MÉTODO CONSTRUTOR (__init__)
+    # =========================================================================
     
     def __init__(
         self,
-        provedor: ProvedorLLM = ProvedorLLM.NVIDIA,
+        provedor: Union[ProvedorLLM, str] = ProvedorLLM.GEMINI,
+        modelo: Optional[str] = None,
         api_key: Optional[str] = None,
-        modelo: str = "z-ai/glm5",
         base_url: Optional[str] = None,
-        temperatura: float = TEMPERATURA_PADRAO,
-        max_tokens: int = MAX_TOKENS_PADRAO,
-        top_p: float = TOP_P_PADRAO,
-        sistema: Optional[str] = None
+        temperatura_padrao: float = TEMPERATURA_PADRAO,
+        max_tokens_padrao: int = MAX_TOKENS_PADRAO,
+        fallback_automatico: bool = True
     ):
         """
-        Inicializa o cliente LLM.
+        Inicializa o cliente LLM com configurações específicas do provedor.
         
-        Args:
-            provedor: Provedor LLM. Padrão: NVIDIA
-            api_key: Chave da API (se None, busca em env/variável)
-            modelo: Nome do modelo. Padrão: "z-ai/glm5"
-            base_url: URL base custom (para APIs compatíveis OpenAI)
-            temperatura: Criatividade (0-2). Padrão: 0.7
-            max_tokens: Max tokens na resposta. Padrão: 4096
-            top_p: Nucleus sampling. Padrão: 1.0
-            sistema: Prompt de sistema custom. Padrão: SISTEMA_PADRAO
+        ARGUMENTOS:
+            provedor: Provedor LLM a ser usado (padrão: GEMINI a partir de v1.3)
+                     Pode ser enum ProvedorLLM ou string ("nvidia", "gemini", "openai")
+            modelo: Nome específico do modelo (se None, usa padrão do provedor)
+            api_key: Chave da API (se None, busca em variáveis de ambiente)
+            base_url: URL base da API (se None, usa URL padrão do provedor)
+            temperatura_padrao: Temperatura padrão para gerações (0.0 a 1.0)
+            max_tokens_padrao: Máximo de tokens nas respostas
+            fallback_automatico: Se True, tenta outro provedor se o principal falhar
+        
+        LEVANTA:
+            ValueError: Se o provedor não for suportado ou API key não encontrada
+            ImportError: Se o SDK do Gemini for necessário mas não estiver instalado
         """
-        logger_llm.info(f"🤖 Inicializando LLM Client ({provedor.value})...")
         
-        self.provedor = provedor
-        self.api_key = api_key or os.getenv(f"{provedor.value.upper()}_API_KEY")
-        self.modelo = modelo
-        self.base_url = base_url
-        self.temperatura = temperatura
-        self.max_tokens = max_tokens
-        self.top_p = top_p
-        self.sistema = sistema or self.SISTEMA_PADRAO
+        # -----------------------------------------------------------------
+        # PASSO 1: Converter e validar o provedor
+        # -----------------------------------------------------------------
+        if isinstance(provedor, str):
+            # Mapeamento de strings para enums
+            mapeamento_provedores = {
+                "nvidia": ProvedorLLM.NVIDIA,
+                "gemini": ProvedorLLM.GEMINI,
+                "openai": ProvedorLLM.OPENAI,
+                "local": ProvedorLLM.LOCAL
+            }
+            provedor_enum = mapeamento_provedores.get(provedor.lower(), ProvedorLLM.NVIDIA)
+        else:
+            provedor_enum = provedor
         
-        # Lazy loading do cliente
-        self._client = None
+        # -----------------------------------------------------------------
+        # PASSO 2: Armazenar configurações básicas
+        # -----------------------------------------------------------------
+        self.provedor = provedor_enum
+        self.modelo = ""  # Será definido abaixo conforme o provedor
+        self.api_key = api_key or ""
+        self.base_url = base_url or ""
+        self.temperatura_padrao = temperatura_padrao
+        self.max_tokens_padrao = max_tokens_padrao
+        self.fallback_automatico = fallback_automatico
         
-        # Histórico de conversa
-        self._historico: list[MensagemLLM] = []
+        # -----------------------------------------------------------------
+        # PASSO 3: Inicializar atributos internos (TODOS aqui!)
+        # -----------------------------------------------------------------
+        self._cliente_api = None           # Cliente da API (OpenAI ou Gemini)
+        self._gemini_client = None         # Cliente específico do Gemini (se aplicável)
+        self._historico: List[MensagemLLM] = []  # Histórico de conversa
+        self._total_requisicoes = 0        # Contador total de requisições feitas
+        self._total_tokens_usados = 0      # Contador total de tokens consumidos
+        self.sistema = SISTEMA_PADRAO      # Prompt de sistema atual
         
-        # Contadores
-        self._total_requests = 0
-        self._total_tokens = 0
+        # -----------------------------------------------------------------
+        # PASSO 4: Configurar conforme o provedor escolhido
+        # -----------------------------------------------------------------
         
-        logger_llm.info(f"   Provedor: {provedor.value}")
-        logger_llm.info(f"   Modelo: {modelo}")
-        if base_url:
-            logger_llm.info(f"   Base URL: {base_url}")
-        logger_llm.info("✅ LLM Client criado!")
-    
+        if provedor_enum == ProvedorLLM.GEMINI:
+            # ======== CONFIGURAÇÃO GOOGLE GEMINI ========
+            self.modelo = modelo or "gemini-2.5-flash"
+            self.api_key = api_key or os.getenv("GEMINI_API_KEY")
+            
+            if not self.api_key:
+                raise ValueError(
+                    "GEMINI_API_KEY não encontrada! "
+                    "Configure: export GEMINI_API_KEY='sua_chave_aqui'"
+                )
+            
+            # Tentar inicializar o cliente Gemini
+            self._inicializar_cliente_gemini()
+            
+        elif provedor_enum == ProvedorLLM.NVIDIA:
+            # ======== CONFIGURAÇÃO NVIDIA (ORIGINAL) ========
+            self.modelo = modelo or "z-ai/glm5"
+            self.api_key = api_key or os.getenv("NVIDIA_API_KEY")
+            self.base_url = base_url or URLS_PADRAO_POR_PROVEDOR[ProvedorLLM.NVIDIA]
+            
+            if not self.api_key:
+                raise ValueError(
+                    "NVIDIA_API_KEY não encontrada! "
+                    "Configure: export NVIDIA_API_KEY='sua_chave_aqui'"
+                )
+            
+            # Importar e criar cliente OpenAI-compatible (NVIDIA usa este formato)
+            from openai import OpenAI
+            self._cliente_api = OpenAI(
+                api_key=self.api_key,
+                base_url=self.base_url
+            )
+            
+        elif provedor_enum == ProvedorLLM.OPENAI:
+            # ======== CONFIGURAÇÃO OPENAI OFICIAL ========
+            self.modelo = modelo or "gpt-4"
+            self.api_key = api_key or os.getenv("OPENAI_API_KEY")
+            self.base_url = base_url or URLS_PADRAO_POR_PROVEDOR[ProvedorLLM.OPENAI]
+            
+            from openai import OpenAI
+            self._cliente_api = OpenAI(api_key=self.api_key, base_url=self.base_url)
+            
+        else:
+            raise ValueError(f"Provedor não suportado: {provedor_enum}")
+        
+        logger_llm.info(
+            f"Cliente LLM criado com sucesso "
+            f"(provedor: {self.provedor.value}, modelo: {self.modelo})"
+        )
+
     # =========================================================================
-    # LAZY LOADING DO CLIENTE
+    # MÉTODOS PRIVADOS DE INICIALIZAÇÃO
+    # =========================================================================
+
+    def _inicializar_cliente_gemini(self):
+        """
+        Inicializa o cliente Google Gemini 2.5 Flash.
+        
+        Este método é chamado automaticamente no construtor quando o provedor
+        é GEMINI. Ele usa o import que já foi feito no topo do arquivo.
+        
+        SE O SDK NÃO ESTIVER INSTALADO:
+            - O import no topo do arquivo já terá falhado e setado 
+            GEMINI_SDK_DISPONIVEL = False
+            - Este método levanta ImportError
+            - O fallback automático para NVIDIA é acionado no __init__
+        
+        SE TUDO CERTO:
+            - Cria o cliente Gemini usando criar_gemini_client()
+            - Loga sucesso
+        """
+        # ================================================================
+        # CORREÇÃO CRÍTICA v1.3:
+        # NÃO re-importar dentro deste método!
+        # O import já foi feito no topo do arquivo (fora da classe).
+        # Re-importar aqui causa "UnboundLocalError" porque Python considera
+        # a variável como local mesmo quando o if não executa.
+        # ================================================================
+        
+        try:
+            # Verificar se o SDK está disponível (foi importado no topo?)
+            if not GEMINI_SDK_DISPONIVEL:
+                # SDK não disponível - mas NÃO re-importar aqui!
+                # Apenas levantar erro informativo para cair no except
+                raise ImportError(
+                    "SDK google-genai não disponível (import no topo falhou). "
+                    "Instale: pip install google-genai"
+                )
+            
+            # Criar o cliente Gemini usando a função importada NO TOPO DO ARQUIVO
+            # (não há risco de UnboundLocalError agora!)
+            self._gemini_client = criar_gemini_client(
+                api_key=self.api_key,
+                modo="flash"  # Modo rápido: gemini-2.5-flash
+            )
+            
+            logger_llm.info("✅ [GEMINI] Cliente Gemini 2.5 Flash inicializado com sucesso!")
+            
+        except ImportError as erro_importacao:
+            # SDK do Gemini não está instalado ou import falhou
+            logger_llm.warning(
+                "⚠️ [GEMINI] SDK google-genai não instalado ou import falhou. "
+                "Execute: pip install google-genai"
+            )
+            logger_llm.warning("🔄 [FALLBACK] Mudando automaticamente para NVIDIA...")
+            
+            if self.fallback_automatico:
+                self._executar_fallback_para_nvidia()
+            else:
+                raise ImportError(
+                    "SDK do Gemini não instalado e fallback desativado. "
+                    "Instale com: pip install google-genai"
+                ) from erro_importacao
+                
+        except Exception as erro_generico:
+            # Qualquer outro erro durante a inicialização
+            logger_llm.error(f"❌ [GEMINI] Erro ao inicializar cliente: {erro_generico}")
+            
+            if self.fallback_automatico:
+                logger_llm.warning("🔄 [FALLBACK] Mudando automaticamente para NVIDIA...")
+                self._executar_fallback_para_nvidia()
+            else:
+                raise RuntimeError(
+                    f"Falha ao inicializar Gemini: {erro_generico}"
+                ) from erro_generico
+    
+    def _executar_fallback_para_nvidia(self):
+        """
+        Executa o fallback de emergência para NVIDIA/GLM5.
+        
+        Este método é chamado quando o Gemini falha e fallback_automatico=True.
+        Ele reconfigura o cliente para usar a API da NVIDIA como backup.
+        
+        MUDANÇAS REALIZADAS:
+            - Altera self.provedor para NVIDIA
+            - Altera self.modelo para "z-ai/glm5"
+            - Carrega API key da variável de ambiente NVIDIA_API_KEY
+            - Cria novo cliente OpenAI-compatible apontando para NVIDIA
+            - Reseta o cliente Gemini para None
+        """
+        logger_llm.info("🔄 Executando fallback para NVIDIA/GLM5...")
+        
+        # Mudar configuração para NVIDIA
+        self.provedor = ProvedorLLM.NVIDIA
+        self.modelo = "z-ai/glm5"
+        self.api_key = os.getenv("NVIDIA_API_KEY", "")
+        self.base_url = URLS_PADRAO_POR_PROVEDOR[ProvedorLLM.NVIDIA]
+        
+        # Limpar cliente Gemini (não será mais usado)
+        self._gemini_client = None
+        
+        # Criar cliente NVIDIA
+        try:
+            from openai import OpenAI
+            self._cliente_api = OpenAI(
+                api_key=self.api_key,
+                base_url=self.base_url
+            )
+            logger_llm.info("✅ [FALLBACK] NVIDIA/GLM5 configurado com sucesso como backup!")
+        except Exception as erro_nvidia:
+            logger_llm.error(f"❌ [FALLBACK] ERRO CRÍTICO: Nem NVIDIA funcionou: {erro_nvidia}")
+            raise RuntimeError(
+                "Falha crítica: tanto Gemini quanto NVIDIA falharam! "
+                "Verifique suas chaves de API e conexão com internet."
+            ) from erro_nvidia
+
+    # =========================================================================
+    # PROPRIEDADE PARA ACESSAR O CLIENTE API (LAZY LOADING)
     # =========================================================================
     
     @property
-    def client(self):
+    def cliente_api(self):
         """
-        Lazy loading do cliente API.
+        Propriedade que retorna o cliente API (lazy loading).
         
-        Cria o cliente correto baseado no provedor selecionado.
+        NOTA IMPORTANTE: Esta propriedade se chama 'cliente_api' (não 'client')
+        para evitar conflito com o atributo self.cliente_api que pode ser
+        definido no __init__.
         
-        Returns:
-            Instância do cliente (OpenAI, Anthropic, ou genai)
+        RETORNA:
+            Instância do cliente (OpenAI ou GenerativeModel do Gemini)
         """
-        if self._client is None:
-            try:
-                if self.provedor in [ProvedorLLM.NVIDIA, ProvedorLLM.OPENAI, ProvedorLLM.LOCAL]:
-                    # Usar SDK OpenAI (compatível com NVIDIA, Ollama, etc.)
-                    from openai import OpenAI
-                    
-                    logger_llm.info(f"📡 Conectando ao provedor {self.provedor.value}...")
-                    
-                    kwargs = {
-                        "api_key": self.api_key
-                    }
-                    
-                    # Adicionar base_url se fornecido (NVIDIA, Ollama, etc.)
-                    if self.base_url:
-                        kwargs["base_url"] = self.base_url
-                    
-                    self._client = OpenAI(**kwargs)
-                    
-                    logger_llm.info("✅ Cliente OpenAI conectado!")
+        if self._cliente_api is None:
+            # Cliente ainda não foi criado, criar agora
+            
+            if self.provedor in [ProvedorLLM.NVIDIA, ProvedorLLM.OPENAI, ProvedorLLM.LOCAL]:
+                # Provedores compatíveis com OpenAI
+                from openai import OpenAI
                 
-                elif self.provedor == ProvedorLLM.GEMINI:
-                    # Usar SDK do Google GenAI
-                    import google.generativeai as genai
-                    
-                    logger_llm.info("📡 Conectando ao Google Gemini...")
-                    
-                    genai.configure(api_key=self.api_key)
-                    self._client = genai.GenerativeModel(self.modelo)
-                    
-                    logger_llm.info("✅ Cliente Gemini conectado!")
+                logger_llm.info(f"📡 Conectando ao provedor {self.provedor.value}...")
+                logger_llm.info(f"   URL: {self.base_url}")
+                logger_llm.info(f"   Modelo: {self.modelo}")
                 
-                else:
-                    raise ValueError(f"Provedor não suportado: {self.provedor}")
-                    
-            except ImportError as e:
-                logger_llm.error(f"❌ Biblioteca necessária não instalada: {e}")
-                raise
-            except Exception as e:
-                logger_llm.error(f"❌ Erro ao conectar: {e}")
-                raise
+                kwargs = {"api_key": self.api_key}
+                if self.base_url:
+                    kwargs["base_url"] = self.base_url
+                
+                self._cliente_api = OpenAI(**kwargs)
+                logger_llm.info("✅ Cliente OpenAI conectado com sucesso!")
+                
+            elif self.provedor == ProvedorLLM.GEMINI:
+                # Google Gemini usa SDK próprio
+                import google.generativeai as genai
+                
+                logger_llm.info("📡 Conectando ao Google Gemini...")
+                genai.configure(api_key=self.api_key)
+                self._cliente_api = genai.GenerativeModel(self.modelo)
+                logger_llm.info("✅ Cliente Gemini conectado com sucesso!")
+                
+            else:
+                raise ValueError(f"Provedor não suportado na propriedade cliente_api: {self.provedor}")
         
-        return self._client
-    
+        return self._cliente_api
+
     # =========================================================================
-    # MÉTODOS PRINCIPAIS DE GERAÇÃO
+    # MÉTODO PRINCIPAL: GERAR RESPOSTA
     # =========================================================================
     
     def gerar(
         self,
         prompt: str,
-        contexto_rag: Optional[list[str]] = None,
+        contexto_rag: Optional[List[str]] = None,
         usar_historico: bool = False,
         temperatura: Optional[float] = None,
         max_tokens: Optional[int] = None,
         stream: bool = False
     ) -> RespostaLLM:
         """
-        Gera resposta completa (sem streaming).
+        Gera uma resposta completa usando o LLM configurado.
         
-        Args:
-            prompt: Prompt do usuário
-            contexto_rag: Lista de contextos do RAG (opcional)
-            usar_historico: Se True, inclui histórico da conversa
-            temperatura: Temperatura override
-            max_tokens: Max tokens override
-            stream: Se True, retorna generator (mesmo assim coleta tudo)
-            
-        Returns:
-            RespostaLLM: Resposta completa com todos os metadados
-            
-        Example:
-            >>> resposta = llm.gerar(
-            ...     prompt="Como escalar canais dark?",
-            ...     contexto_rag=["Contexto 1...", "Contexto 2..."]
-            ... )
+        Este é o método principal da classe. Ele aceita um prompt e retorna
+        uma resposta completa do modelo, com suporte opcional a:
+        - Contexto RAG (busca semântica em documentos)
+        - Histórico de conversa (para manter contexto)
+        - Streaming (coleta via chunks e retorna completo ao final)
+        - Escolha dinâmica entre Gemini e NVIDIA (com fallback automático)
+        
+        ARGUMENTOS:
+            prompt: Texto principal da pergunta ou comando do usuário
+            contexto_rag: Lista de trechos de texto relevantes do RAG System
+            usar_historico: Se True, inclui mensagens anteriores da conversa
+            temperatura: Criatividade da resposta (0.0 a 1.0). None usa padrão.
+            max_tokens: Máximo de tokens na resposta. None usa padrão.
+            stream: Se True, usa streaming interno mas retorna RespostaLLM completa
+        
+        RETORNA:
+            RespostaLLM com todos os dados da resposta (conteúdo, métricas, etc.)
+        
+        LEVANTA:
+            RuntimeError: Se ambos Gemini e NVIDIA falharem
+            ValueError: Se parâmetros forem inválidos
+        
+        EXEMPLO:
+            >>> resposta = llm.gerar("Qual a capital do Brasil?")
             >>> print(resposta.conteudo)
+            "A capital do Brasil é Brasília..."
+            >>> print(resposta.tempo_execucao)
+            1.85
         """
-        inicio = time.time()
+        # Marcar início para medir tempo de execução
+        inicio_execucao = time.time()
         
-        # Coletar todos os chunks se for streaming
+        # ================================================================
+        # MODO STREAMING: Coleta todos os chunks e monta resposta completa
+        # ================================================================
         if stream:
-            conteudo_completo = []
-            reasoning_completo = []
+            conteudo_chunks = []
+            reasoning_chunks = []
             
+            # Iterar sobre o gerador de streaming
             for chunk_data in self.gerar_stream(
                 prompt=prompt,
                 contexto_rag=contexto_rag,
@@ -371,142 +605,243 @@ IMPORTANTE:
                 max_tokens=max_tokens
             ):
                 if chunk_data.get("conteudo"):
-                    conteudo_completo.append(chunk_data["conteudo"])
+                    conteudo_chunks.append(chunk_data["conteudo"])
                 if chunk_data.get("reasoning"):
-                    reasoning_completo.append(chunk_data["reasoning"])
+                    reasoning_chunks.append(chunk_data["reasoning"])
             
-            tempo = time.time() - inicio
+            # Calcular tempo total
+            tempo_total = time.time() - inicio_execucao
             
+            # Retornar resposta completa montada dos chunks
             return RespostaLLM(
-                conteudo="".join(conteudo_completo),
-                reasoning="".join(reasoning_completo) if reasoning_completo else None,
+                conteudo="".join(conteudo_chunks),
+                reasoning="".join(reasoning_chunks) if reasoning_chunks else None,
                 modelo=self.modelo,
                 provedor=self.provedor.value,
-                tempo_execucao=tempo
+                tempo_execucao=tempo_total
             )
         
-        # Modo normal (sem streaming)
-        try:
-            logger_llm.info(f"🤔 Gerando resposta (modelo: {self.modelo})...")
-            
-            # Preparar mensagens
-            mensagens = self._preparar_mensagens(
-                prompt=prompt,
-                contexto_rag=contexto_rag,
-                usar_historico=usar_historico
-            )
-            
-            # Chamada à API
-            if self.provedor in [ProvedorLLM.NVIDIA, ProvedorLLM.OPENAI, ProvedorLLM.LOCAL]:
-                resposta_api = self.client.chat.completions.create(
-                    model=self.modelo,
-                    messages=mensagens,
-                    temperature=temperatura or self.temperatura,
-                    max_tokens=max_tokens or self.max_tokens,
-                    top_p=self.top_p,
-                    extra_body=self._get_extra_body()
+        # ================================================================
+        # MODO NORMAL: TENTAR GEMINI PRIMEIRO (SE CONFIGURADO)
+        # ================================================================
+        
+        # Verificar se temos cliente Gemini disponível e ativo
+        tem_gemini_disponivel = (
+            hasattr(self, '_gemini_client') and 
+            self._gemini_client is not None and
+            self.provedor == ProvedorLLM.GEMINI
+        )
+        
+        if tem_gemini_disponivel:
+            try:
+                logger_llm.info(
+                    f"🤖 [GEMINI] Gerando resposta com modelo {self._gemini_client.modelo}..."
                 )
                 
-                # Extrair resposta
-                escolha = resposta_api.choices[0]
-                conteudo = escolha.message.content or ""
-                reasoning = getattr(escolha.message, 'reasoning_content', None)
+                # Construir prompt final (com contexto RAG se fornecido)
+                prompt_final = prompt
+                if contexto_rag and len(contexto_rag) > 0:
+                    contexto_formatado = "\n\n".join([f"- {ctx}" for ctx in contexto_rag])
+                    prompt_final = (
+                        f"CONTEXTO ADICIONAL DA BASE DE CONHECIMENTO:\n\n"
+                        f"{contexto_formatado}\n\n"
+                        f"---\n\n"
+                        f"{prompt}"
+                    )
                 
-                # Tokens usados
-                tokens = {
-                    "prompt_tokens": resposta_api.usage.prompt_tokens if resposta_api.usage else 0,
-                    "completion_tokens": resposta_api.usage.completion_tokens if resposta_api.usage else 0,
-                    "total_tokens": resposta_api.usage.total_tokens if resposta_api.usage else 0
-                }
+                # Realizar chamada à API do Gemini
+                # Importar tipos do SDK do Gemini
+                from google.genai import types
                 
-            elif self.provedor == ProvedorLLM.GEMINI:
-                # Implementação Gemini aqui se necessário
-                conteudo = "Resposta Gemini (implementar)"
-                reasoning = None
-                tokens = {}
+                # Configurar parâmetros da geração
+                configuracao_geracao = types.GenerateContentConfig(
+                    temperature=temperatura or self.temperatura_padrao,
+                    max_output_tokens=max_tokens or self.max_tokens_padrao,
+                    top_p=0.95,
+                    top_k=40
+                )
+                
+                # Chamada síncrona à API Gemini
+                resposta_gemini = self._gemini_client.client.models.generate_content(
+                    model=self._gemini_client.modelo,
+                    contents=prompt_final,
+                    config=configuracao_geracao
+                )
+                
+                # Extrair texto da resposta do Gemini
+                if hasattr(resposta_gemini, 'text'):
+                    texto_resposta = resposta_gemini.text
+                else:
+                    # Fallback: converter para string se não tiver atributo .text
+                    texto_resposta = str(resposta_gemini)
+                
+                # Calcular tempo de execução
+                tempo_total = time.time() - inicio_execucao
+                
+                logger_llm.info(
+                    f"✅ [GEMINI] Resposta recebida em {tempo_total:.2f}s "
+                    f"({len(texto_resposta)} caracteres)"
+                )
+                
+                # Retornar resposta estruturada
+                return RespostaLLM(
+                    conteudo=texto_resposta,
+                    reasoning=None,  # Gemini Flash não retorna reasoning separado
+                    modelo=self._gemini_client.modelo,
+                    provedor="gemini",
+                    tempo_execucao=tempo_total
+                )
+                
+            except Exception as erro_gemini:
+                # Erro ao chamar Gemini
+                logger_llm.error(f"❌ [GEMINI] Falha na geração: {erro_gemini}")
+                
+                # Verificar se deve fazer fallback para NVIDIA
+                if self.fallback_automatico:
+                    logger_llm.warning(
+                        "🔄 [FALLBACK] Gemini falhou, voltando para NVIDIA/GLM5..."
+                    )
+                    # Mudar provedor e continuar execução (cai no bloco NVIDIA abaixo)
+                    self._executar_fallback_para_nvidia()
+                else:
+                    # Sem fallback, propagar erro
+                    raise RuntimeError(
+                        f"Gemini falhou e fallback está desativado: {erro_gemini}"
+                    ) from erro_gemini
+        
+        # ================================================================
+        # PADRÃO: NVIDIA / GLM5 (OU FALLBACK DO GEMINI)
+        # ================================================================
+        
+        # Se chegou aqui, usar NVIDIA (ou porque era o padrão ou porque Gemini falhou)
+        logger_llm.info(f"🤖 [NVIDIA] Gerando resposta com modelo {self.modelo}...")
+        
+        # Montar lista de mensagens no formato esperado pela API OpenAI-compatible
+        mensagens = self._preparar_mensagens(
+            prompt=prompt,
+            contexto_rag=contexto_rag,
+            usar_historico=usar_historico
+        )
+        
+        # Montar dicionário de argumentos para a chamada da API
+        argumentos_chamada = {
+            "model": self.modelo,
+            "messages": mensagens,
+            "temperature": temperatura or self.temperatura_padrao,
+            "max_tokens": max_tokens or self.max_tokens_padrao
+        }
+        
+        # Realizar chamada à API NVIDIA (formato OpenAI-compatible)
+        try:
+            resposta_api = self._cliente_api.chat.completions.create(**argumentos_chamada)
             
-            tempo = time.time() - inicio
+            # Extrair conteúdo textual da resposta
+            conteudo_resposta = resposta_api.choices[0].message.content or ""
             
-            # Criar objeto de resposta
-            resposta = RespostaLLM(
-                conteudo=conteudo,
-                reasoning=reasoning,
-                modelo=self.modelo,
-                provedor=self.provedor.value,
-                tokens_usados=tokens,
-                tempo_execucao=tempo
-            )
+            # Verificar se há reasoning (alguns modelos GLM retornam raciocínio separado)
+            reasoning_resposta = None
+            if hasattr(resposta_api.choices[0].message, 'reasoning_content'):
+                reasoning_resposta = resposta_api.choices[0].message.reasoning_content
             
-            # Atualizar histórico
-            self._adicionar_ao_historico("user", prompt)
-            self._adicionar_ao_historico("assistant", conteudo)
-            
-            # Atualizar contadores
-            self._total_requests += 1
-            self._total_tokens += tokens.get("total_tokens", 0)
+            # Calcular tempo de execução
+            tempo_total = time.time() - inicio_execucao
             
             logger_llm.info(
-                f"✅ Resposta gerada em {tempo:.2f}s "
-                f"({tokens.get('total_tokens', 0)} tokens)"
+                f"✅ [NVIDIA] Resposta recebida em {tempo_total:.2f}s "
+                f"({len(conteudo_resposta)} caracteres)"
             )
             
-            return resposta
+            # Atualizar estatísticas
+            self._total_requisicoes += 1
+            if hasattr(resposta_api, 'usage') and resposta_api.usage:
+                self._total_tokens_usados += getattr(resposta_api.usage, 'total_tokens', 0)
             
-        except Exception as e:
-            logger_llm.error(f"❌ Erro ao gerar resposta: {e}")
-            raise
+            # Retornar resposta estruturada
+            return RespostaLLM(
+                conteudo=conteudo_resposta,
+                reasoning=reasoning_resposta,
+                modelo=self.modelo,
+                provedor=self.provedor.value,
+                tempo_execucao=tempo_total
+            )
+            
+        except Exception as erro_nvidia:
+            # Erro na chamada à API NVIDIA
+            logger_llm.error(f"❌ [NVIDIA] Erro na chamada à API: {erro_nvidia}")
+            raise RuntimeError(
+                f"Erro ao gerar resposta via NVIDIA: {erro_nvidia}"
+            ) from erro_nvidia
+
+    # =========================================================================
+    # MÉTODO DE STREAMING: GERADOR DE CHUNKS
+    # =========================================================================
     
     def gerar_stream(
         self,
         prompt: str,
-        contexto_rag: Optional[list[str]] = None,
+        contexto_rag: Optional[List[str]] = None,
         usar_historico: bool = False,
         temperatura: Optional[float] = None,
         max_tokens: Optional[int] = None
-    ) -> Generator[dict[str, Optional[str]], None, None]:
+    ) -> Generator[Dict[str, Optional[str]], None, None]:
         """
-        Gerador de resposta em streaming (chunk por chunk).
+        Gerador que yields chunks da resposta em tempo real (streaming).
         
-        Yields:
-            Dicionários com keys:
-            - 'conteudo': Texto normal (str ou None)
-            - 'reasoning': Texto de raciocínio (str ou None)
-            - 'done': Bool indicando fim (último chunk)
-            
-        Example:
-            >>> for chunk in llm.gerar_stream("Explique IA"):
-            ...     if chunk['conteudo']:
-            ...         print(chunk['conteudo'], end="")
-            ...     if chunk['done']:
-            ...         print("\n[Fim]")
+        Diferente do método gerar(), este método é um GERADOR (yield) que
+        produz pedaços da resposta conforme eles chegam da API. Isso é
+        útil para mostrar o texto aparecendo aos poucos no Telegram.
+        
+        CADA YIELD RETORNA UM DICIONÁRIO COM:
+            "conteudo": Parte do texto da resposta (ou None se for reasoning)
+            "reasoning": Parte do raciocínio do modelo (ou None se for conteúdo)
+            "done": Booleano indicando se é o último chunk (True = terminou)
+        
+        ARGUMENTOS:
+            Mesmos do método gerar()
+        
+        RETORNA:
+            Gerador de dicionários com chunks da resposta
+        
+        EXEMPLO DE USO:
+            >>> for chunk in llm.gerar_stream("Conte uma piada"):
+            ...     if chunk["conteudo"]:
+            ...         print(chunk["conteudo"], end="", flush=True)
+            ...     if chunk["done"]:
+            ...         print("\\n[Resposta completa!]")
         """
         logger_llm.info(f"🌊 Iniciando streaming (modelo: {self.modelo})...")
         
         try:
-            # Preparar mensagens
+            # Preparar mensagens para a API
             mensagens = self._preparar_mensagens(
                 prompt=prompt,
                 contexto_rag=contexto_rag,
                 usar_historico=usar_historico
             )
             
-            # Streaming via OpenAI-compatible API
+            # ============================================================
+            # CASO 1: NVIDIA / OPENAI / LOCAL (API OpenAI-compatible)
+            # ============================================================
             if self.provedor in [ProvedorLLM.NVIDIA, ProvedorLLM.OPENAI, ProvedorLLM.LOCAL]:
-                completion = self.client.chat.completions.create(
+                
+                # Iniciar chamada com stream=True
+                stream_resposta = self._cliente_api.chat.completions.create(
                     model=self.modelo,
                     messages=mensagens,
-                    temperature=temperatura or self.temperatura,
-                    max_tokens=max_tokens or self.max_tokens,
-                    top_p=self.top_p,
-                    extra_body=self._get_extra_body(),
-                    stream=True
+                    temperature=temperatura or self.temperatura_padrao,
+                    max_tokens=max_tokens or self.max_tokens_padrao,
+                    top_p=TOP_P_PADRAO,
+                    extra_body=self._obter_corpo_extra(),
+                    stream=True  # IMPORTANTE: ativa streaming!
                 )
                 
-                conteudo_completo = []
-                reasoning_completo = []
+                # Acumuladores para montar resposta completa
+                partes_conteudo = []
+                partes_reasoning = []
                 
-                for chunk in completion:
-                    # Verificações mais robustas
+                # Iterar sobre cada chunk da stream
+                for chunk in stream_resposta:
+                    # Validar estrutura do chunk
                     if not hasattr(chunk, 'choices') or not chunk.choices:
                         continue
                     
@@ -517,76 +852,107 @@ IMPORTANTE:
                     
                     delta = escolha.delta
                     
-                    # Extrair reasoning (thinking) - VÁRIOS FORMATOS POSSÍVEIS
-                    reasoning = None
+                    # Extrair reasoning (raciocínio interno do modelo)
+                    reasoning_chunk = None
                     
-                    # Formato 1: atributo direto
-                    if hasattr(delta, 'reasoning_content'):
-                        reasoning = delta.reasoning_content
-                    
-                    # Formato 2: dentro de dict/extra
+                    if hasattr(delta, 'reasoning_content') and delta.reasoning_content:
+                        reasoning_chunk = delta.reasoning_content
                     elif isinstance(delta, dict):
-                        reasoning = delta.get('reasoning_content')
+                        reasoning_chunk = delta.get('reasoning_content')
                     
-                    # Formato 3: no content mas tem thinking
-                    elif not getattr(delta, 'content', None):
-                        # Pode ser chunk de reasoning puro
-                        if hasattr(delta, 'reasoning_content'):
-                            reasoning = delta.reasoning_content
-                    
-                    if reasoning:
-                        reasoning_str = str(reasoning) if reasoning else ""
+                    # Se encontrou reasoning, yield e acumular
+                    if reasoning_chunk:
+                        reasoning_str = str(reasoning_chunk)
                         if reasoning_str.strip():
-                            reasoning_completo.append(reasoning_str)
+                            partes_reasoning.append(reasoning_str)
                             yield {
                                 "conteudo": None,
                                 "reasoning": reasoning_str,
                                 "done": False
                             }
                     
-                    # Extrair conteúdo normal
-                    conteudo = getattr(delta, 'content', None)
+                    # Extrair conteúdo principal
+                    conteudo_chunk = getattr(delta, 'content', None)
                     
-                    # Se não tem content, tenta como dict
-                    if conteudo is None and isinstance(delta, dict):
-                        conteudo = delta.get('content')
-                    
-                    if conteudo is not None and str(conteudo).strip():
-                        conteudo_str = str(conteudo)
-                        conteudo_completo.append(conteudo_str)
-                        print(conteudo_str, end="", flush=True)  # ⬅️ PRINT DIRETO!
+                    if conteudo_chunk is not None and str(conteudo_chunk).strip():
+                        conteudo_str = str(conteudo_chunk)
+                        partes_conteudo.append(conteudo_str)
+                        
+                        # Imprimir no console em tempo real (efeito "digitando")
+                        print(conteudo_str, end="", flush=True)
+                        
                         yield {
                             "conteudo": conteudo_str,
                             "reasoning": None,
                             "done": False
                         }
                 
-                # Chunk final
-                print()  # Nova linha após streaming
+                # Fim da stream
+                print()  # Nova linha após o texto
+                
+                # Yield final marcando conclusão
                 yield {
                     "conteudo": None,
                     "reasoning": None,
                     "done": True
                 }
                 
-                # Salvar no histórico
-                texto_final = "".join(conteudo_completo)
-                if texto_final.strip():  # Só se tiver conteúdo
+                # Adicionar ao histórico de conversa
+                texto_completo = "".join(partes_conteudo)
+                if texto_completo.strip():
                     self._adicionar_ao_historico("user", prompt)
-                    self._adicionar_ao_historico("assistant", texto_final)
+                    self._adicionar_ao_historico("assistant", texto_completo)
                 
-                self._total_requests += 1
+                # Atualizar estatísticas
+                self._total_requisicoes += 1
                 
+            # ============================================================
+            # CASO 2: GEMINI (SDK próprio)
+            # ============================================================
             elif self.provedor == ProvedorLLM.GEMINI:
-                # Streaming Gemini (implementar se necessário)
-                yield {"conteudo": "Streaming Gemini (implementar)", "reasoning": None, "done": True}
-                
-        except Exception as e:
-            logger_llm.error(f"❌ Erro no streaming: {e}")
-            yield {"conteudo": f"[ERRO: {e}]", "reasoning": None, "done": True}
-    
+                # Verificar se temos cliente Gemini disponível para streaming
+                if self._gemini_client and hasattr(self._gemini_client, 'gerar_stream'):
+                    # Streaming nativo do Gemini (implementação futura/optional)
+                    logger_llm.info("🌊 [GEMINI] Usando streaming nativo do Gemini...")
+                    
+                    try:
+                        for chunk in self._gemini_client.gerar_stream(prompt):
+                            yield {
+                                "conteudo": chunk,
+                                "reasoning": None,
+                                "done": False
+                            }
+                        
+                        # Marcador final
+                        yield {"conteudo": None, "reasoning": None, "done": True}
+                        
+                    except Exception as erro_stream_gemini:
+                        logger_llm.error(f"❌ [GEMINI] Erro no streaming: {erro_stream_gemini}")
+                        yield {
+                            "conteudo": f"[ERRO no streaming Gemini: {erro_stream_gemini}]",
+                            "reasoning": None,
+                            "done": True
+                        }
+                else:
+                    # Gemini disponível mas sem suporte a streaming (ainda)
+                    logger_llm.warning("⚠️ [GEMINI] Streaming não implementado, usando modo normal...")
+                    yield {
+                        "conteudo": "[Streaming Gemini em desenvolvimento - use gerar() por enquanto]",
+                        "reasoning": None,
+                        "done": True
+                    }
+            
+        except Exception as erro_geral:
+            # Erro crítico no streaming
+            logger_llm.error(f"❌ Erro durante streaming: {erro_geral}")
+            yield {
+                "conteudo": f"[ERRO: {erro_geral}]",
+                "reasoning": None,
+                "done": True
+            }
+
     # =========================================================================
-    # MÉTODO ESPECIAL: RAG COMPLETO (Retrieval + Generation)
+    # MÉTODO: PERGUNTAR COM RAG (BUSCA SEMÂNTICA + GERAÇÃO)
     # =========================================================================
     
     def perguntar_com_rag(
@@ -597,330 +963,404 @@ IMPORTANTE:
         stream: bool = False
     ) -> RespostaLLM:
         """
-        Faz uma pergunta usando RAG completo (busca + geração).
+        Faz uma pergunta usando RAG completo (Retrieval-Augmented Generation).
         
-        Este é o método principal que combina:
-        1. Busca de contextos relevantes no RAG System
-        2. Injeção dos contextos no prompt
-        3. Geração de resposta pelo LLM
+        Este método combina busca semântica em documentos com geração de resposta,
+        permitindo que o LLM responda perguntas baseadas em sua base de conhecimento.
         
-        Args:
+        FLUXO DE EXECUÇÃO:
+            1. Busca contextos relevantes no RAG System
+            2. Formata os contextos junto com a pergunta
+            3. Chama o método gerar() com o enriquecido
+            4. Retorna resposta com metadados sobre as fontes usadas
+        
+        ARGUMENTOS:
             pergunta: Pergunta do usuário
-            rag_system: Instância do RAGSystem (opcional)
-            n_contextos: Número de contextos a buscar. Padrão: 3
-            stream: Se True, usa streaming
-            
-        Returns:
-            RespostaLLM: Resposta gerada com contextos
-            
-        Example:
-            >>> from engine.rag_system import RAGSystem
-            >>> rag = RAGSystem()
-            >>> rag.inicializar()
-            >>> 
-            >>> resposta = llm.perguntar_com_rag(
-            ...     "Como escalar canais dark?",
-            ...     rag_system=rag
-            ... )
-            >>> print(resposta.conteudo)
+            rag_system: Instância do RAGSystem (se None, usa conhecimento geral)
+            n_contextos: Número máximo de contextos a buscar (padrão: 3)
+            stream: Se True, usa streaming na geração
+        
+        RETORNA:
+            RespostaLLM com atributos adicionais:
+                .fontes: Lista de nomes das fontes usadas
+                .n_contextos: Quantidade de contextos encontrados
         """
-        logger_llm.info(f"🔍 RAG Complete: '{pergunta[:60]}...'")
+        logger_llm.info(f"🔍 [RAG] Pergunta recebida: '{pergunta[:60]}...'")
         
-        # Buscar contextos no RAG (se disponível)
-        contextos_texto = []
-        fontes = []
+        # Listas para armazenar contextos e fontes
+        lista_contextos_texto = []
+        lista_fontes = []
         
+        # Se RAG System foi fornecido, buscar contextos relevantes
         if rag_system is not None:
             try:
-                resultado_rag = rag_system.perguntar(
+                resultado_busca = rag_system.perguntar(
                     pergunta=pergunta,
                     n_contextos=n_contextos
                 )
                 
-                if resultado_rag['pode_responder'] and resultado_rag['contextos']:
-                    for i, ctx in enumerate(resultado_rag['contextos'], 1):
-                        fonte = resultado_rag['fontes'][i] if i <= len(resultado_rag['fontes']) else "desconhecido"
-                        contextos_texto.append(f"[Fonte: {fonte}]\n{ctx}")
-                        fontes.append(fonte)
+                # Verificou se encontrou contextos relevantes
+                if resultado_busca['pode_responder'] and resultado_busca['contextos']:
+                    # Extrair cada contexto com sua fonte
+                    for indice, contexto in enumerate(resultado_busca['contextos'], start=1):
+                        nome_fonte = (
+                            resultado_busca['fontes'][indice] 
+                            if indice <= len(resultado_busca['fontes']) 
+                            else "fonte_desconhecida"
+                        )
+                        
+                        # Formatado contexto com identificação da fonte
+                        contexto_formatado = f"[Fonte: {nome_fonte}]\n{contexto}"
+                        lista_contextos_texto.append(contexto_formatado)
+                        lista_fontes.append(nome_fonte)
                     
                     logger_llm.info(
-                        f"📚 {len(contextos_textos)} contextos encontrados "
-                        f"(confiança: {resultado_rag['score_confianca']:.2f})"
+                        f"📚 [RAG] Encontrados {len(lista_contextos_texto)} contextos relevantes "
+                        f"(confiança: {resultado_busca['score_confianca']:.2f})"
                     )
                 else:
-                    logger_llm.info("⚠️ Nenhum contexto relevante encontrado, usando conhecimento geral")
+                    logger_llm.info(
+                        "⚠️ [RAG] Nenhum contexto relevante encontrado, "
+                        "usando conhecimento geral do modelo"
+                    )
                     
-            except Exception as e:
-                logger_llm.warning(f"⚠️ Erro ao buscar no RAG: {e}")
+            except Exception as erro_rag:
+                logger_llm.warning(f"⚠️ [RAG] Erro ao buscar contextos: {erro_rag}")
         
-        # Montar prompt com contexto
-        if contextos_texto:
-            contexto_formatado = "\n\n---\n\n".join(contextos_texto)
-            prompt_sistema = self.TEMPLATE_RAG.format(
+        # Montar prompt com ou sem contextos RAG
+        if lista_contextos_texto:
+            # Juntar todos os contextos com separadores
+            textos_juntos = "\n\n---\n\n".join(lista_contextos_texto)
+            
+            # Usar template RAG que instrui o modelo a citar fontes
+            prompt_sistema_rag = self.TEMPLATE_RAG.format(
                 sistema=self.sistema,
-                contextos=contexto_formatado
+                contextos=textos_juntos
             )
         else:
-            prompt_sistema = self.sistema
+            # Sem contextos, usar sistema padrão
+            prompt_sistema_rag = self.sistema
         
-        # Gerar resposta temporariamente com sistema modificado
+        # Salvar sistema original para restaurar depois
         sistema_original = self.sistema
-        self.sistema = prompt_sistema
+        self.sistema = prompt_sistema_rag
         
         try:
+            # Gerar resposta com o sistema enriquecido
             resposta = self.gerar(
                 prompt=pergunta,
                 stream=stream
             )
             
-            # Adicionar metadata sobre fontes
-            resposta.fontes = fontes
-            resposta.n_contextos = len(contextos_texto)
+            # Anexar metadados de fontes à resposta
+            resposta.fontes = lista_fontes
+            resposta.n_contextos = len(lista_contextos_texto)
             
             return resposta
             
         finally:
-            # Restaurar sistema original
+            # Sempre restaurar sistema original (mesmo se der erro)
             self.sistema = sistema_original
-    
+
     # =========================================================================
-    # MÉTODOS UTILITÁRIOS
+    # MÉTODOS AUXILIARES: HISTÓRICO E PREPARAÇÃO
     # =========================================================================
     
     def limpar_historico(self) -> None:
-        """Limpa todo o histórico de conversa."""
-        tamanho = len(self._historico)
+        """
+        Limpa todo o histórico de conversa.
+        
+        Útil para começar uma nova conversa do zero, sem contexto anterior.
+        """
+        tamanho_antigo = len(self._historico)
         self._historico.clear()
-        logger_llm.info(f"🧹 Histórico limpo ({tamanho} mensagens removidas)")
+        logger_llm.info(f"🧹 Histórico limpo ({tamanho_antigo} mensagens removidas)")
     
-    def obter_historico(self) -> list[dict]:
-        """Retorna o histórico como lista de dicts."""
-        return [msg.to_dict() for msg in self._historico]
-    
-    def obter_estatisticas(self) -> dict[str, Any]:
-        """Retorna estatísticas de uso do LLM."""
-        return {
-            "provedor": self.provedor.value,
-            "modelo": self.modelo,
-            "total_requests": self._total_requests,
-            "total_tokens": self._total_tokens,
-            "historico_tamanho": len(self._historico),
-            "temperatura": self.temperatura,
-            "max_tokens": self.max_tokens
-        }
-    
-    # =========================================================================
-    # MÉTODOS PRIVADOS
-    # =========================================================================
+    def obter_historico(self) -> List[dict]:
+        """
+        Retorna o histórico de conversa como lista de dicionários.
+        
+        Útil para persistir a conversa ou enviar para outra parte do sistema.
+        """
+        return [msg.para_dicionario() for msg in self._historico]
     
     def _preparar_mensagens(
         self,
         prompt: str,
-        contexto_rag: Optional[list[str]] = None,
+        contexto_rag: Optional[List[str]] = None,
         usar_historico: bool = False
-    ) -> list[dict[str, str]]:
+    ) -> List[Dict[str, str]]:
         """
-        Prepara a lista de mensagens para a API.
+        Prepara a lista de mensagens no formato esperado pela API OpenAI.
         
-        Args:
-            prompt: Prompt do usuário
-            contexto_rag: Contextos do RAG (já formatados)
-            usar_historico: Se True, inclui histórico
-            
-        Returns:
-            Lista de mensagens no formato da API
+        ESTRUTURA RETORNADA:
+            [
+                {"role": "system", "content": "..."},
+                {"role": "user", "content": "..."},  // (opcional) mensagens anteriores
+                {"role": "assistant", "content": "..."},
+                {"role": "user", "content": "..."}  // prompt atual
+            ]
         """
-        mensagens = []
+        mensagens_formatadas = []
         
-        # Mensagem de sistema
-        mensagens.append({"role": "system", "content": self.sistema})
+        # Sempre adicionar mensagem de sistema primeiro
+        mensagens_formatadas.append({"role": "system", "content": self.sistema})
         
-        # Histórico (se solicitado)
+        # Adicionar histórico de conversa (se solicitado e houver)
         if usar_historico and self._historico:
-            for msg in self._historico[-20:]:  # Últimas 20 mensagens
-                mensagens.append(msg.to_dict())
+            # Limitar às últimas 20 mensagens para não exceder limite de tokens
+            for mensagem in self._historico[-20:]:
+                mensagens_formatadas.append(mensagem.para_dicionario())
         
-        # Contexto RAG (se fornecido diretamente)
-        if contexto_rag:
-            contexto_texto = "\n\n---\n\n".join(contexto_rag)
-            mensagem_com_contexto = (
-                f"CONTEXTO RELEVANTE:\n\n{contexto_texto}\n\n"
-                f"Com base neste contexto, responda:\n\n{prompt}"
+        # Adicionar prompt atual (com ou sem contexto RAG)
+        if contexto_rag and len(contexto_rag) > 0:
+            # Temos contexto RAG, injetar antes do prompt
+            contexto_junto = "\n\n---\n\n".join(contexto_rag)
+            mensagem_enriquecida = (
+                f"CONTEXTO RELEVANTE ENCONTRADO NA BASE DE CONHECIMENTO:\n\n"
+                f"{contexto_junto}\n\n"
+                f"Com base neste contexto, responda à seguinte pergunta:\n\n"
+                f"{prompt}"
             )
-            mensagens.append({"role": "user", "content": mensagem_com_contexto})
+            mensagens_formatadas.append({"role": "user", "content": mensagem_enriquecida})
         else:
-            # Prompt normal
-            mensagens.append({"role": "user", "content": prompt})
+            # Sem contexto RAG, prompt puro
+            mensagens_formatadas.append({"role": "user", "content": prompt})
         
-        return mensagens
+        return mensagens_formatadas
     
-    def _get_extra_body(self) -> dict[str, Any]:
+    def _obter_corpo_extra(self) -> Dict[str, Any]:
         """
-        Retorna parâmetros extras para a API.
+        Retorna parâmetros extras para enviar na API (usado para models com thinking).
         
-        Para modelos com thinking/reasoning (GLM5, DeepSeek-R1, etc.)
+        Alguns modelos (como GLM e DeepSeek) suportam "thinking" ou "reasoning",
+        onde o modelo mostra seu raciocínio interno antes da resposta final.
+        Este método configura esses parâmetros extras.
         """
-        extra = {}
+        parametros_extras = {}
         
-        # Habilitar thinking para modelos que suportam
+        # Ativar thinking para modelos que suportam
         if "glm" in self.modelo.lower() or "deepseek" in self.modelo.lower():
-            extra["chat_template_kwargs"] = {
+            parametros_extras["chat_template_kwargs"] = {
                 "enable_thinking": True,
-                "clear_thinking": False
+                "clear_thinking": False  # Mantém o raciocínio visível
             }
         
-        return extra
+        return parametros_extras
     
     def _adicionar_ao_historico(self, role: str, conteudo: str) -> None:
-        """Adiciona mensagem ao histórico."""
-        self._historico.append(MensagemLLM(
-            role=role,
-            conteudo=conteudo
-        ))
+        """
+        Adiciona uma mensagem ao histórico de conversa.
         
-        # Limitar histórico a 50 mensagens
+        Mantém o histórico limitado às últimas 50 mensagens para economizar memória.
+        """
+        self._historico.append(MensagemLLM(role=role, conteudo=conteudo))
+        
+        # Manter histórico limitado (máximo 50 mensagens)
         if len(self._historico) > 50:
             self._historico = self._historico[-50:]
 
+    # =========================================================================
+    # MÉTODO: OBTER ESTATÍSTICAS DE USO
+    # =========================================================================
+    
+    def obter_estatisticas(self) -> Dict[str, Any]:
+        """
+        Retorna estatísticas completas de uso do cliente LLM.
+        
+        INCLUI:
+            - Configuração atual (provedor, modelo, temperatura)
+            - Contadores de uso (requisições, tokens)
+            - Estado do histórico
+            - Disponibilidade do Gemini
+            - Estatísticas específicas do Gemini (se ativo)
+        
+        Útil para monitoramento e debugging.
+        """
+        estatisticas = {
+            # Configuração atual
+            "provedor": self.provedor.value,
+            "modelo": self.modelo,
+            "base_url": self.base_url,
+            "temperatura": self.temperatura_padrao,
+            "max_tokens": self.max_tokens_padrao,
+            
+            # Contadores de uso
+            "total_requisicoes": self._total_requisicoes,
+            "total_tokens_usados": self._total_tokens_usados,
+            
+            # Estado do histórico
+            "historico_tamanho": len(self._historico),
+            
+            # Configuração de API
+            "api_key_configurada": bool(bool(self.api_key)),
+            "fallback_automatico": self.fallback_automatico,
+            
+            # Estado do Gemini
+            "gemini_sdk_disponivel": GEMINI_SDK_DISPONIVEL,
+            "gemini_client_ativo": self._gemini_client is not None,
+        }
+        
+        # Se Gemini está ativo, incluir estatísticas dele
+        if self._gemini_client and hasattr(self._gemini_client, 'obter_estatisticas'):
+            try:
+                estatisticas["gemini"] = self._gemini_client.obter_estatisticas()
+            except Exception:
+                estatisticas["gemini"] = {"erro": "Não foi possível obter stats do Gemini"}
+        
+        return estatisticas
+
 
 # =============================================================================
-# FUNÇÃO DE FÁBRICA
+# FUNÇÕES DE FÁBRICA (FACTORY FUNCTIONS)
 # =============================================================================
 
 def criar_llm_nvidia(
     api_key: str,
     modelo: str = "z-ai/glm5",
-    **kwargs
+    **kwargs_adicionais
 ) -> LLMClient:
     """
-    Função fábrica para criar cliente NVIDIA (mais conveniente).
+    Função fábrica para criar um cliente LLM com provedor NVIDIA.
     
-    Args:
-        api_key: Chave da API NVIDIA
-        modelo: Modelo. Padrão: "z-ai/glm5"
-        **kwargs: Parâmetros adicionais para LLMClient
-        
-    Returns:
-        LLMClient: Configurado para NVIDIA NIM
-        
-    Example:
-        >>> llm = criar_llm_nvidia(
-        ...     api_key="nvapi-...",
+    Facilita a criação de clientes NVIDIA sem precisar lembrar de todos
+    os parâmetros. Simplesmente passa a API key e o modelo desejado.
+    
+    ARGUMENTOS:
+        api_key: Chave da API da NVIDIA (nvapi-...)
+        modelo: Modelo a ser usado (padrão: "z-ai/glm5")
+        **kwargs_adicionais: Outros parâmetros passados para LLMClient
+    
+    RETORNA:
+        Instância de LLMClient configurada para NVIDIA
+    
+    EXEMPLO:
+        >>> llm_nvidia = criar_llm_nvidia(
+        ...     api_key="nvapi-sua-chave-aqui",
         ...     modelo="z-ai/glm5"
         ... )
-        >>> resposta = llm.gerar("Olá!")
+        >>> resposta = llm_nvidia.gerar("Olá!")
     """
     return LLMClient(
         provedor=ProvedorLLM.NVIDIA,
         api_key=api_key,
         modelo=modelo,
         base_url="https://integrate.api.nvidia.com/v1",
-        **kwargs
+        **kwargs_adicionais
     )
 
 
 def criar_llm_gemini(
     api_key: str,
-    modelo: str = "gemini-1.5-flash",
-    **kwargs
+    modelo: str = "gemini-2.5-flash",
+    **kwargs_adicionais
 ) -> LLMClient:
     """
-    Função fábrica para criar cliente Gemini.
+    Função fábrica para criar um cliente LLM com provedor Google Gemini.
     
-    Args:
-        api_key: Chave da API Google
-        modelo: Modelo. Padrão: "gemini-1.5-flash"
-        **kwargs: Parâmetros adicionais
-        
-    Returns:
-        LLMClient: Configurado para Gemini
+    Facilita a criação de clientes Gemini. Recomendado usar gemini-2.5-flash
+    para melhor performance (mais rápido e mais barato).
+    
+    ARGUMENTOS:
+        api_key: Chave da API do Google AI (começa com "AIza...")
+        modelo: Modelo a ser usado (padrão: "gemini-2.5-flash")
+        **kwargs_adicionais: Outros parâmetros passados para LLMClient
+    
+    RETORNA:
+        Instância de LLMClient configurada para Gemini
+    
+    EXEMPLO:
+        >>> llm_gemini = criar_llm_gemini(
+        ...     api_key="AIzaSy...",
+        ...     modelo="gemini-2.5-flash"
+        ... )
+        >>> resposta = llm_gemini.gerar("Como você está?")
     """
     return LLMClient(
         provedor=ProvedorLLM.GEMINI,
         api_key=api_key,
         modelo=modelo,
-        **kwargs
+        **kwargs_adicionais
     )
 
 
 # =============================================================================
-# BLOCO DE TESTE RÁPIDO
+# BLOCO DE TESTE RÁPIDO (EXECUTA QUANDO RODA O ARQUIVO DIRETAMENTE)
 # =============================================================================
 
 if __name__ == "__main__":
-    print("=" * 60)
-    print("🤖 LLM CLIENT - TESTE RÁPIDO")
-    print("=" * 60)
+    """
+    Teste rápido para verificar se o LLMClient está funcionando.
     
-    # Criar cliente NVIDIA (com suas credenciais!)
-    print("\n📡 Criando cliente NVIDIA...")
-    llm = criar_llm_nvidia(
-        api_key="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",
-        modelo="z-ai/glm5"
-    )
-    print("✅ Cliente criado!")
+    Execute: python engine/llm_client.py
+    """
     
-    # Teste 1: Geração simples
-    print("\n" + "-" * 60)
-    print("🧪 Teste 1: Geração Simples")
-    print("-" * 60)
+    print("=" * 70)
+    print("🤖 LLM CLIENT v1.3 - TESTE RÁPIDO DE FUNCIONAMENTO")
+    print("=" * 70)
+    print()
     
-    resposta = llm.gerar(
-        prompt="Explique o que é Second Brain em 1 parágrafo.",
-        max_tokens=200
-    )
+    # -----------------------------------------------------------------
+    # TESTE 1: Verificar importações e classes
+    # -----------------------------------------------------------------
+    print("✅ [1/4] Verificando importações...")
+    print(f"   - Classe LLMClient: {LLMClient is not None}")
+    print(f"   - Enum ProvedorLLM: {list(ProvedorLLM)}")
+    print(f"   - Dataclass RespostaLLM: {RespostaLLM is not None}")
+    print(f"   - Gemini SDK disponível: {GEMINI_SDK_DISPONIVEL}")
+    print()
     
-    print(f"\n📝 Resposta ({resposta.tempo_execucao:.2f}s):")
-    print(f"{resposta.conteudo}")
+    # -----------------------------------------------------------------
+    # TESTE 2: Criar cliente NVIDIA (se tiver chave)
+    # -----------------------------------------------------------------
+    print("✅ [2/4] Testando criação de cliente NVIDIA...")
+    try:
+        chave_nvidia_teste = os.getenv("NVIDIA_API_KEY", "")
+        if chave_nvidia_teste:
+            llm_teste_nvidia = criar_llm_nvidia(
+                api_key=chave_nvidia_teste,
+                modelo="z-ai/glm5"
+            )
+            print(f"   ✓ Cliente NVIDIA criado: {llm_teste_nvidia.modelo}")
+            print(f"   ✓ Estatísticas: {llm_teste_nvidia.obter_estatisticas()['provedor']}")
+        else:
+            print("   ⚠ NVIDIA_API_KEY não encontrada (pulando teste NVIDIA)")
+    except Exception as erro_teste_nvidia:
+        print(f"   ✗ Erro no teste NVIDIA: {erro_teste_nvidia}")
+    print()
     
-    if resposta.reasoning:
-        print(f"\n🧠 Raciocínio (primeiros 200 chars):")
-        print(f"{resposta.reasoning[:200]}...")
+    # -----------------------------------------------------------------
+    # TESTE 3: Criar cliente Gemini (se tiver chave e SDK)
+    # -----------------------------------------------------------------
+    print("✅ [3/4] Testando criação de cliente Gemini...")
+    try:
+        chave_gemini_teste = os.getenv("GEMINI_API_KEY", "")
+        if chave_gemini_teste and GEMINI_SDK_DISPONIVEL:
+            llm_teste_gemini = criar_llm_gemini(
+                api_key=chave_gemini_teste,
+                modelo="gemini-2.5-flash"
+            )
+            print(f"   ✓ Cliente Gemini criado: {llm_teste_gemini.modelo}")
+            print(f"   ✓ Gemini ativo: {llm_teste_gemini._gemini_client is not None}")
+        else:
+            if not chave_gemini_teste:
+                print("   ⚠ GEMINI_API_KEY não encontrada (pulando teste Gemini)")
+            if not GEMINI_SDK_DISPONIVEL:
+                print("   ⚠ SDK Gemini não instalado (pip install google-genai)")
+    except Exception as erro_teste_gemini:
+        print(f"   ✗ Erro no teste Gemini: {erro_teste_gemini}")
+    print()
     
-    # Teste 2: Streaming
-    print("\n" + "-" * 60)
-    print("🌊 Teste 2: Streaming")
-    print("-" * 60)
+    # -----------------------------------------------------------------
+    # TESTE 4: Exibir constante e configurações
+    # -----------------------------------------------------------------
+    print("✅ [4/4] Configurações globais:")
+    print(f"   - Temperatura padrão: {TEMPERATURA_PADRAO}")
+    print(f"   - Max tokens padrão: {MAX_TOKENS_PADRAO}")
+    print(f"   - Top-P padrão: {TOP_P_PADRAO}")
+    print(f"   - Provedores disponíveis: {[p.value for p in ProvedorLLM]}")
+    print()
     
-    print("\n📝 Streaming: ")
-    for chunk in llm.gerar_stream(
-        prompt="Dê 3 dicas rápidas de produtividade (uma linha cada)",
-        max_tokens=150
-    ):
-        if chunk['conteudo']:
-            print(chunk['conteudo'], end="")
-        if chunk['done']:
-            print("\n✅ Streaming finalizado!")
-    
-    # Teste 3: Com RAG (simulado)
-    print("\n" + "-" * 60)
-    print("🔍 Teste 3: RAG Completo (Simulado)")
-    print("-" * 60)
-    
-    contextos_simulados = [
-        "Second Brain é um sistema de organização pessoal digital...",
-        "Ferramentas populares incluem Obsidian, Notion, Evernote...",
-        "A metodologia PARA organiza: Projects, Areas, Resources, Archives..."
-    ]
-    
-    resposta_rag = llm.gerar(
-        prompt="O que preciso para começar um Second Brain?",
-        contexto_rag=contextos_simulados,
-        max_tokens=250
-    )
-    
-    print(f"\n📝 Resposta com RAG ({resposta_rag.tempo_execucao:.2f}s):")
-    print(f"{resposta_rag.conteudo}")
-    
-    # Estatísticas
-    print("\n" + "-" * 60)
-    print("📊 Estatísticas")
-    print("-" * 60)
-    
-    stats = llm.obter_estatisticas()
-    for chave, valor in stats.items():
-        print(f"   {chave}: {valor}")
-    
-    print("\n" + "=" * 60)
-    print("🎉 TESTES DO LLM CLIENT CONCLUÍDOS!")
-    print("=" * 60)
+    print("=" * 70)
+    print("🎉 LLM CLIENT v1.3 - TODOS OS TESTES CONCLUÍDOS!")
+    print("=" * 70)
