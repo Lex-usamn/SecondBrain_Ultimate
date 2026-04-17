@@ -4,7 +4,7 @@
 
 [![Status](https://img.shields.io/badge/Status-99%25%20Completo-brightgreen)](https://github.com/Lex-usamn/SecondBrain_Ultimate)
 [![Gemini](https://img.shields.io/badge/Provider-Gemini%202.5%20Flash-blue)](https://ai.google.dev/)
-[![Telegram](https://img.shields.io/badge/Bot-@Lex_Cerebro_bot-0088cc.svg?logo=telegram)](https://t.me/Lex_Cerebro_bot)
+[![Telegram](https://img.shields.io/badge/Bot-@seu_bot-0088cc.svg?logo=telegram)](https://t.me/seu_bot)
 [![Python](https://img.shields.io/badge/Python-3.10+-yellow.svg?logo=python&logoColor=white)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-red.svg)](LICENSE)
 
@@ -19,7 +19,7 @@ O **LEX-BRAIN HYBRID** é um sistema inteligente de **Segundo Cérebro** que com
 - 🗂️ **Obsidian** - Base de conhecimento local em Markdown
 - 🌐 **Lex Flow Dashboard** - Web App para gestão P.A.R.A (Projetos, Áreas, Recursos, Arquivos)
 - 🤖 **Engine Python** - Motor orquestrador central com Singleton + Lazy Loading
-- 💬 **Telegram Bot** (@Lex_Cerebro_bot) - Interface conversacional com IA
+- 💬 **Telegram Bot** (@seu_bot) - Interface conversacional com IA
 - 🧠 **Google Gemini 2.5 Flash** - Provider de IA ultra-rápido (~3-5s)
 
 ### 🎯 Objetivo Principal
@@ -30,7 +30,7 @@ Organizar **automaticamente** todas as informações, tarefas e notas do usuári
 
 ## ✨ Funcionalidades Principais
 
-### 🤖 Telegram Bot (@Lex_Cerebro_bot)
+### 🤖 Telegram Bot (@seu_bot)
 | Comando | Descrição |
 |---------|-----------|
 | `/start` | Inicia o bot e mostra menu |
@@ -148,7 +148,7 @@ python iniciar_scheduler.py
 ```text
 [GEMINI] Cliente Gemini 2.5 Flash inicializado!
 Cliente LLM criado com sucesso (provedor: gemini, modelo: gemini-2.5-flash)
->>> @Lex_Cerebro_bot está ONLINE e OUVINDO!
+>>> @seu_bot está ONLINE e OUVINDO!
 BRAIN LLM ORCHESTRATOR v3.8 ATIVO!
    -> IA Conversacional HABILITADA (GEMINI POWERED! ⚡)
    -> Contextos .md CARREGADOS (SOUL, USER, MEMORY, HEARTBEAT)
@@ -330,7 +330,7 @@ Bot: Estou aqui! 😊 Pronto para ajudar.
 
 ### Aplicações
 - **Lex Flow Dashboard**: [https://flow.lex-usamn.com.br](https://flow.lex-usamn.com.br)
-- **Telegram Bot**: [@Lex_Cerebro_bot](https://t.me/Lex_Cerebro_bot) ✅ **ONLINE**
+- **Telegram Bot**: [@seu_bot](https://t.me/seu_bot) ✅ **ONLINE**
 - **GitHub Repository**: [https://github.com/Lex-usamn/SecondBrain_Ultimate](https://github.com/Lex-usamn/SecondBrain_Ultimate)
 
 ### Canais do Criador
@@ -370,7 +370,7 @@ Gerente de TI | Creator Digital | Desenvolvedor
 - 🐙 GitHub: [@Lex-usamn](https://github.com/Lex-usamn)
 - 🎬 YouTube: [Canal Dark](https://www.youtube.com/channel/UC7naxii3igMnnYW8oMHK0jA)
 - 📸 Instagram: [@cerne.das.coisas](https://instagram.com/cerne.das.coisas)
-- 💬 Telegram: [@Lex_Cerebro_bot](https://t.me/Lex_Cerebro_bot)
+- 💬 Telegram: [@seu_bot](https://t.me/seu_bot)
 
 ---
 

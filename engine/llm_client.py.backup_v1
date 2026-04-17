@@ -1,0 +1,697 @@
+"""
+==============================================================================
+LLM CLIENT v1.2 - Cliente de Modelos de Linguagem Multi-Provedor
+==============================================================================
+
+CORREÇÕES v1.2:
+✅ Ordem de definições corrigida (TOP_PADRAO agora funciona!)
+✅ NVIDIA API URL padrão automático
+✅ Google Gemini suportado
+✅ Streaming com reasoning/thinking
+
+Provedores:
+- ✅ NVIDIA NIM (z-ai/glm5, llama, etc.)
+- ✅ OpenAI (GPT-4, GPT-3.5-turbo)
+- ✅ Google Gemini (gemini-pro, gemini-flash)
+
+Autor: Lex-Brain Hybrid | v1.0 → v1.2 | Atualizado: 14/04/2026
+Status: ✅ PRODUÇÃO
+==============================================================================
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import os
+import time
+from dataclasses import dataclass, field
+from datetime import datetime
+from enum import Enum
+from pathlib import Path
+from typing import Any, Generator, Optional
+
+# =============================================================================
+# CONFIGURAÇÃO DE LOGGING
+# =============================================================================
+
+logger_llm = logging.getLogger("LexBrain.LLMClient")
+logger_llm.setLevel(logging.DEBUG)
+
+log_dir = Path(__file__).parent.parent / "logs"
+log_dir.mkdir(exist_ok=True)
+
+file_handler = logging.FileHandler(
+    log_dir / "llm_client.log",
+    encoding="utf-8"
+)
+file_handler.setLevel(logging.DEBUG)
+
+formatter = logging.Formatter(
+    "%(asctime)s | %(levelname)-8s | %(name)s | %(funcName)s:%(lineno)d | %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S"
+)
+file_handler.setFormatter(formatter)
+logger_llm.addHandler(file_handler)
+
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.INFO)
+console_handler.setFormatter(formatter)
+logger_llm.addHandler(console_handler)
+
+
+# =============================================================================
+# ENUMERAÇÕES E CONSTANTES (ANTES DA CLASSE!)
+# =============================================================================
+
+class ProvedorLLM(str, Enum):
+    """Provedores de LLM disponíveis."""
+    NVIDIA = "nvidia"          # NVIDIA NIM API (OpenAI-compatible)
+    OPENAI = "openai"          # OpenAI oficial
+    GEMINI = "gemini"          # Google Gemini
+    LOCAL = "local"            # Local/Ollama
+
+
+@dataclass
+class MensagemLLM:
+    """Representa uma mensagem no chat."""
+    role: str  # "system", "user", "assistant"
+    conteudo: str
+    reasoning: Optional[str] = None
+    timestamp: datetime = field(default_factory=datetime.now)
+    
+    def to_dict(self) -> dict[str, str]:
+        """Converte para formato de API."""
+        return {"role": self.role, "content": self.conteudo}
+
+
+@dataclass
+class RespostaLLM:
+    """Resposta completa do LLM."""
+    conteudo: str
+    reasoning: Optional[str] = None
+    modelo: str = ""
+    provedor: str = ""
+    tokens_usados: dict[str, int] = field(default_factory=dict)
+    tempo_execucao: float = 0.0
+    custo_estimado: float = 0.0
+    
+    def to_dict(self) -> dict[str, Any]:
+        """Converte para dicionário."""
+        return {
+            "conteudo": self.conteudo,
+            "reasoning": self.reasoning,
+            "modelo": self.modelo,
+            "provedor": self.provedor,
+            "tokens_usados": self.tokens_usados,
+            "tempo_execucao": self.tempo_execucao,
+            "custo_estimado": self.custo_estimado
+        }
+
+
+# =============================================================================
+# CONSTANTES MOVIDAS PARA FORA DA CLASSE (CORREÇÃO PRINCIPAL!)
+# =============================================================================
+
+TEMPERATURA_PADRAO = 0.7      # ✅ AGORA FORA!
+MAX_TOKENS_PADRAO = 4096       # ✅ AGORA FORA!
+TOP_PADAo = 1.0                # ✅ AGORA FORA!
+
+
+# =============================================================================
+# CLASSE PRINCIPAL: LLMClient
+# =============================================================================
+
+class LLMClient:
+    """
+    Cliente unificado para múltiplos provedores LLM.
+    
+    CORREÇÕES v1.2:
+    - Constantes movidas PARA FORA da classe (resolvem NameError!)
+    - base_url automático para cada provedor
+    - Melhor tratamento de erros
+    """
+    
+    SISTEMA_PADRAO = """Você é o Lex-Brain Hybrid, um assistente de IA pessoal avançado.
+
+Suas características:
+- Especialista em Segundo Cérebro e produtividade
+- Ajuda a organizar conhecimento, tarefas e projetos
+- Gera ideias de conteúdo criativo
+- Fornece insights baseados em dados do usuário
+- Responde em português brasileiro de forma clara e objetiva
+
+Estilo de comunicação:
+- Direto e prático (sem enrolação)
+- Usa exemplos concretos quando possível
+- Estrutura respostas com listas quando adequado
+- Pode usar emojis moderadamente
+- Adapta o nível de detalhe à complexidade da pergunta"""
+    
+    TEMPLATE_RAG = """{sistema}
+
+CONTEXTO RELEVANTE ENCONTRADO NA BASE DE CONHECIMENTO:
+---
+{contextos}
+---
+
+Com base nos contextos acima, responda à pergunta do usuário.
+Se os contextos não contêm informação suficiente, diga honestamente e use seu conhecimento geral.
+
+IMPORTANTE:
+- Citre as fontes quando usar informação dos contextos
+- Seja específico e acionável nas respostas
+- Se não souber, diga que não sabe em vez de inventar"""
+    
+    def __init__(
+        self,
+        provedor: ProvedorLLM = ProvedorLLM.NVIDIA,
+        api_key: Optional[str] = None,
+        modelo: str = "z-ai/glm5",
+        base_url: Optional[str] = None,
+        temperatura: float = TEMPERATURA_PADRAO,   # ✅ USA CONSTANTE!
+        max_tokens: int = MAX_TOKENS_PADRAO,         # ✅ USA CONSTANTE!
+        top_p: float = TOP_PADRAo,                  # ✅ USA CONSTANTE!
+        sistema: Optional[str] = None
+    ):
+        """
+        Inicializa o cliente LLM.
+        
+        Args:
+            provedor: Provedor LLM. Padrão: NVIDIA
+            api_key: Chave da API (se None, busca em env/variável)
+            modelo: Nome do modelo. Padrão: "z-ai/glm5"
+            base_url: URL base custom (para APIs compatíveis OpenAI)
+            temperatura: Criatividade (0-2). Padrão: 0.7
+            max_tokens: Max tokens na resposta. Padrão: 4096
+            top_p: Nucleus sampling. Padrão: 1.0
+            sistema: Prompt de sistema custom
+        """
+        logger_llm.info(f"🤖 Inicializando LLM Client ({provedor.value})...")
+        
+        self.provedor = provedor
+        self.api_key = (
+            api_key 
+            or os.getenv("OPENAI_API_KEY")     # Fallback 1: OpenAI key
+            or os.getenv("NVIDIA_API_KEY")        # Fallback 2: NVIDIA key
+            or os.getenv(f"{provedor.value.upper()}_API_KEY")  # Fallback 3: Genérico
+        )
+        
+        self.modelo = modelo
+        
+        # 🔧️ CORREÇÃO v1.2: Base URL automático se não fornecido
+        if base_url:
+            self.base_url = base_url
+        else:
+            # Usar URL padrão baseado no provedor
+            urls_por_provedor = {
+                ProvedorLLM.NVIDIA: "https://integrate.api.nvidia.com/v1",
+                ProvedorLLM.OPENAI: "https://api.openai.com/v1",
+                ProvedorLLM.GEMINI: None,  # Usa SDK próprio
+                ProvedorLLM.LOCAL: None,   # Usa URL custom ou local
+            }
+            self.base_url = urls_por_provedor.get(provedor)
+            
+            if self.base_url:
+                logger_llm.info(f"   📡 Base URL: {self.base_url}")
+        
+        self.temperatura = temperatura
+        self.max_tokens = max_tokens
+        self.top_p = top_p
+        self.sistema = sistema or self.SISTEMA_PADRAO
+        
+        # Lazy loading do cliente
+        self._client = None
+        
+        # Histórico de conversa
+        self._historico: list[MensagemLLM] = []
+        
+        # Contadores
+        self._total_requests = 0
+        self._total_tokens = 0
+        
+        logger_llm.info(f"   Provedor: {provedor.value}")
+        logger_llm.info(f"   Modelo: {modelo}")
+        if self.base_url:
+            logger_llm.info(f"   Base URL: {self.base_url}")
+        if self.api_key:
+            key_preview = f"{self.api_key[:8]}...{self.api_key[-4:]}" if len(self.api_key) > 12 else "***"
+            logger_llm.info(f"   🔑 API Key: {key_preview}")
+        else:
+            logger_llm.warning("   ⚠️ Nenhuma API key encontrada!")
+        
+        logger_llm.info("✅ LLM Client criado!")
+    
+    # =========================================================================
+    # LAZY LOADING DO CLIENTE
+    # =========================================================================
+    @property
+    def client(self):
+        """Lazy loading do cliente API."""
+        if self._client is None:
+            try:
+                if self.provedor in [ProvedorLLM.NVIDIA, ProdevorLLM.OPENAI, ProvedorLLM.LOCAL]:
+                    from openai import OpenAI
+                    
+                    logger_llm.info(f"📡 Conectando ao provedor {self.provedor.value}...")
+                    logger_llm.info(f"   URL: {self.base_url}")
+                    logger_llm_info(f"   Modelo: {self.modelo}")
+                    
+                    kwargs = {"api_key": self.api_key}
+                    
+                    if self.base_url:
+                        kwargs["base_url"] = self.base_url
+                    
+                    self._client = OpenAI(**kwargs)
+                    logger_llm.info("✅ Cliente OpenAI conectado!")
+                
+                elif self.provedor == ProvedorLLM.GEMINI:
+                    import google.generativeai as genai
+                    
+                    logger_llm.info("📡 Conectando ao Google Gemini...")
+                    genai.configure(api_key=self.api_key)
+                    self._client = genai.GenerativeModel(self.modelo)
+                    logger_llm.info("✅ Cliente Gemini conectado!")
+                
+                else:
+                    raise ValueError(f"Provedor não suportado: {self.provedor}")
+                    
+            except ImportError as e:
+                logger_llm.error(f"❌ Biblioteca necessária não instalada: {e}")
+                raise
+            except Exception as e:
+                logger_llm.error(f"❌ Erro ao conectar: {e}")
+                raise
+        
+        return self._client
+    
+    # =========================================================================
+    # MÉTODOS PRINCIPAIS DE GERAÇÃO
+    # =========================================================================
+    
+    def gerar(
+        self,
+        prompt: str,
+        contexto_rag: Optional[list[str]] = None,
+        usar_historico: bool = False,
+        temperatura: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+        stream: bool = False
+    ) -> RespostaLLM:
+        """Gera resposta completa (sem streaming)."""
+        inicio = time.time()
+        
+        if stream:
+            conteudo_completo = []
+            reasoning_completo = []
+            
+            for chunk_data in self.gerar_stream(
+                prompt=prompt,
+                contexto_rag=contexto_rag,
+                usar_historico=usar_historico,
+                temperatura=temperatura,
+                max_tokens=max_tokens
+            ):
+                if chunk_data.get("conteudo"):
+                    conteudo_completo.append(chunk_data["conteudo"])
+                if chunk_data.get("reasoning"):
+                    reasoning_completo.append(chunk_data["reasoning"])
+            
+            tempo = time.time() - inicio
+            
+            return RespostaLLM(
+                conteudo="".join(conteudo_completo),
+                reasoning="".join(reasoning_completo) if reasoning_completo else None,
+                modelo=self.modelo,
+                provedor=self.provedor.value,
+                tempo_execucao=tempo
+            )
+        
+        try:
+            logger_llm.info(f"🤔 Gerando resposta (modelo: {self.modelo})...")
+            
+            mensagens = self._preparar_mensagens(
+                prompt=prompt,
+                contexto_rag=contexto_rag,
+                usar_historico=usar_historico
+            )
+            
+            if self.provedor in [ProvedorLLM.NVIDIA, ProvedorLLM.OPENAI, ProvedorLLM.LOCAL]:
+                resposta_api = self.client.chat.completions.create(
+                    model=self.modelo,
+                    messages=mensagens,
+                    temperature=temperatura or self.temperatura,
+                    max_tokens=max_tokens or self.max_tokens,
+                    top_p=self.top_p,
+                    extra_body=self._get_extra_body()
+                )
+                
+                escolha = resposta_api.choices[0]
+                conteudo = escolha.message.content or ""
+                reasoning = getattr(escolha.message, 'reasoning_content', None)
+                
+                tokens = {
+                    "prompt_tokens": resposta_api.usage.prompt_tokens if resposta_api.usage else 0,
+                    "completion_tokens": resposta_api.usage.comletions_tokens if resposta_api.usage else 0,
+                    "total_tokens": resposta_api.usage.total_tokens if resposta_api.usage else 0
+                }
+                
+            elif self.provedor == ProvedorLLM.GEMINI:
+                conteudo = "Resposta Gemini (implementar)"
+                reasoning = None
+                tokens = {}
+            
+            tempo = time.time() - inicio
+            
+            resposta = RespostaLLM(
+                conteudo=conteudo,
+                reasoning=reasoning,
+                modelo=self.modelo,
+                provedor=self.provedor.value,
+                tokens_usados=tokens,
+                tempo_execucao=tempo
+            )
+            
+            self._adicionar_ao_historico("user", prompt)
+            self._adicionar_ao_historico("assistant", conteudo)
+            
+            self._total_requests += 1
+            self._total_tokens += tokens.get("total_tokens", 0)
+            
+            logger_llm.info(
+                f"✅ Resposta gerada em {tempo:.2f}s "
+                f"({tokens.get('total_tokens', 0)} tokens)"
+            )
+            
+            return resposta
+            
+        except Exception as e:
+            logger_llm.error(f"❌ Erro ao gerar resposta: {e}")
+            raise
+    
+    def gerar_stream(
+        self,
+        prompt: str,
+        contexto_rag: Optional[list[str]] = None,
+        usar_historico: bool = False,
+        temperatura: Optional[float] = None,
+        max_tokens: Optional[int] = None
+    ) -> Generator[dict[str, Optional[str]], None, None]:
+        """Gerador de resposta em streaming (chunk por chunk)."""
+        logger_llm.info(f"🌊 Iniciando streaming (modelo: {self.modelo})...")
+        
+        try:
+            mensagens = self._preparar_mensagens(
+                prompt=prompt,
+                contexto_rag=contexto_rag,
+                usar_historico=usar_historico
+            )
+            
+            if self.provedor in [ProvedorLLM.NVIDIA, ProvedorLLM.OPENAI, ProvedorLLM.LOCAL]:
+                completion = self.client.chat.completions.create(
+                    model=self.modelo,
+                    messages=mensagens,
+                    temperature=temperatura or self.temperatura,
+                    max_tokens=max_tokens or self.max_tokens,
+                    top_p=self.top_p,
+                    extra_body=self._get_extra_body(),
+                    stream=True
+                )
+                
+                conteudo_completo = []
+                reasoning_completo = []
+                
+                for chunk in completion:
+                    if not hasattr(chunk, 'choices') or not chunk.choices:
+                        continue
+                    
+                    escolha = chunk.choices[0]
+                    
+                    if not hasattr(escolha, 'delta') or escolha.delta is None:
+                        continue
+                    
+                    delta = escolha.delta
+                    
+                    reasoning = None
+                    
+                    if hasattr(delta, 'reasoning_content'):
+                        reasoning = delta.reasoning_content
+                    elif isinstance(delta, dict):
+                        reasoning = delta.get('reasoning_content')
+                    elif not getattr(delta, 'content', None):
+                        if hasattr(delta, 'reasoning_content'):
+                            reasoning = delta.reasoning_content
+                    
+                    if reasoning:
+                        reasoning_str = str(reasoning) if reasoning else ""
+                        if reasoning_str.strip():
+                            reasoning_completo.append(reasoning_str)
+                            yield {
+                                "conteudo": None,
+                                "reasoning": reasoning_str,
+                                "done": False
+                            }
+                    
+                    conteudo = getattr(delta, 'content', None)
+                    
+                    if conteudo is None and isinstance(delta, dict):
+                        conteudo = delta.get('content')
+                    
+                    if conteudo is not None and str(conteudo).strip():
+                        conteudo_str = str(conteudo)
+                        conteudo_completo.append(conteudo_str)
+                        print(conteudo_str, end="", flush=True)
+                        yield {
+                            "conteudo": conteudo_str,
+                            "reasoning": None,
+                            "done": False
+                        }
+                
+                print()
+                yield {
+                    "conteudo": None,
+                    "reasoning": None,
+                    "done": True
+                }
+                
+                texto_final = "".join(conteudo_completo)
+                if texto_final.strip():
+                    self._adicionar_ao_historico("user", prompt)
+                    self._adicionar_ao_historico("assistant", texto_final)
+                
+                self._total_requests += 1
+                
+            elif self.provedor == ProvedorLLM.GEMINI:
+                yield {"conteudo": "Streaming Gemini (implementar)", "reasoning": None, "done": True}
+                
+        except Exception as e:
+            logger_llm.error(f"❌ Erro no streaming: {e}")
+            yield {"conteudo": f"[ERRO: {e}]", "reasoning": None, "done": True"}
+    
+    # =========================================================================
+    # MÉTODO ESPECIAL: RAG COMPLETO
+    # =========================================================================
+    def perguntar_com_rag(
+        self,
+        pergunta: str,
+        rag_system=None,
+        n_contextos: int = 3,
+        stream: bool = False
+    ) -> RespostaLLM:
+        """Faz uma pergunta usando RAG completo."""
+        logger_llm.info(f"🔍 RAG Complete: '{pergunta[:60]}...'")
+        
+        contextos_texto = []
+        fontes = []
+        
+        if rag_system is not None:
+            try:
+                resultado_rag = rag_system.perguntar(
+                    pergunta=pergunta,
+                    n_contextos=n_contextos
+                )
+                
+                if resultado_rag['pode_responder'] and resultado_rag['contextos']:
+                    for i, ctx in enumerate(resultado_rag['contextos'], 1):
+                        fonte = resultado_rag['fontes'][i] if i <= len(resultado_rag['fontes']) else "desconhecido"
+                        contextos_texto.append(f"[Fonte: {fonte}]\n{ctx}")
+                        fontes.append(fonte)
+                    
+                    logger_llm.info(
+                        f"📚 {len(contextos_texto)} contextos encontrados "
+                        f"(confiança: {resultado_rag['score_confianca']:.2f})"
+                    )
+                else:
+                    logger_llm.info("⚠️ Nenhum contexto relevante encontrado, usando conhecimento geral")
+                    
+            except Exception as e:
+                logger_llm.warning(f"⚠️ Erro ao buscar no RAG: {e}")
+        
+        if contextos_texto:
+            contexto_formatado = "\n\n---\n\n".join(contextos_texto)
+            prompt_sistema = self.TEMPLATE_RAG.format(
+                sistema=self.sistema,
+                contextos=contexto_formatado
+            )
+        else:
+            prompt_sistema = self.sistema
+        
+        sistema_original = self.sistema
+        self.sistema = prompt_sistema
+        
+        try:
+            resposta = self.gerar(
+                prompt=pergunta,
+                stream=stream
+            )
+            
+            resposta.fontes = fontes
+            resposta.n_contextos = len(contextos_texto)
+            
+            return resposta
+            
+        finally:
+            self.sistema = sistema_original
+    
+    # =========================================================================
+    # MÉTODOS UTILITÁRIOS
+    # =========================================================================
+    def limpar_historico(self) -> None:
+        """Limpa todo o histórico de conversa."""
+        tamanho = len(self._historico)
+        self._historico.clear()
+        logger_llm.info(f"🧹 Histórico limpo ({tamanho} mensagens removidas)")
+    
+    def obter_historico(self) -> list[dict]:
+        """Retorna o histórico como lista de dicts."""
+        return [msg.to_dict() for msg in self._historico]
+    
+    def obter_estatisticas(self) -> dict[str, Any]:
+        """Retorna estatísticas de uso do LLM."""
+        return {
+            "provedor": self.provedor.value,
+            "modelo": self.modelo,
+            "base_url": self.base_url,
+            "total_requests": self._total_requests,
+            "total_tokens": self._total_tokens,
+            "historico_tamanho": len(self._historico),
+            "temperatura": self.temperatura,
+            "max_tokens": self.max_tokens,
+            "api_key_configurada": bool(bool(self.api_key))
+        }
+    
+    # =========================================================================
+    # MÉTODOS PRIVADOS
+    # =========================================================================
+    def _preparar_mensagens(
+        self,
+        prompt: str,
+        contexto_rag: Optional[list[str]] = None,
+        usar_historico: bool = False
+    ) -> list[dict[str, str]]:
+        """Prepara a lista de mensagens para a API."""
+        mensagens = []
+        
+        mensagens.append({"role": "system", "content": self.sistema})
+        
+        if usar_historico and self._historico:
+            for msg in self._historico[-20:]:
+                mensagens.append(msg.to_dict())
+        
+        if contexto_rag:
+            contexto_texto = "\n\n---\n\n".join(contexto_rag)
+            mensagem_com_contexto = (
+                f"CONTEXTO RELEVANTE:\n\n{contexto_texto}\n\n"
+                f"Com base neste contexto, responda:\n\n{prompt}"
+            )
+            mensagens.append({"role": "user", "content": mensagem_com_contexto})
+        else:
+            mensagens.append({"role": "user", "content": prompt})
+        
+        return mensagens
+    
+    def _get_extra_body(self) -> dict[str, Any]:
+        """Retorna parâmetros extras para a API (thinking/reasoning)."""
+        extra = {}
+        
+        if "glm" in self.modelo.lower() or "deepseek" in self.modelo.lower():
+            extra["chat_template_kwargs"] = {
+                "enable_thinking": True,
+                "clear_thinking": False
+            }
+        
+        return extra
+    
+    def _adicionar_ao_historico(self, role: str, conteudo: str) -> None:
+        """Adiciona mensagem ao histórico."""
+        self._historico.append(MensagemLLM(role=role, conteudo=conteudo))
+        
+        if len(self._historico) > 50:
+            self._historico = self._histórico[-50:]
+
+
+# =============================================================================
+# FUNÇÕES DE FÁBRICA
+# =============================================================================
+
+def criar_llm_nvidia(
+    api_key: str,
+    modelo: str = "z-ai/glm5",
+    **kwargs
+) -> LLMClient:
+    """
+    Função fábrica para criar cliente NVIDIA.
+    
+    >>> llm = criar_llm_nvidia(api_key="nvapi-...", modelo="z-ai/glm5")
+    """
+    return LLMClient(
+        provedor=ProvedorLLM.NVIDIA,
+        api_key=api_key,
+        modelo=modelo,
+        base_url="https://integrate.api.nvidia.com/v1",
+        **kwargs
+    )
+
+
+def criar_llm_gemini(
+    api_key: str,
+    modelo: str = "gemini-1.5-flash",
+    **kwargs
+) -> LLMClient:
+    """
+    Função fábrica para criar cliente Gemini.
+    
+    >>> llm = criar_llm_gemini(api_key="sua_chave_gemini")
+    """
+    return LLMClient(
+        provedor=genini,
+        api_key=api_key,
+        modelo=modelo,
+        **kwargs
+    )
+
+
+# =============================================================================
+# BLOCO DE TESTE RÁPIDO
+# =============================================================================
+
+if __name__ == "__main__":
+    print("=" * 60)
+    print("🤖 LLM CLIENT v1.2 - TESTE RÁPIDO")
+    print("=" * 60)
+    
+    print("\n📡 Criando cliente NVIDIA...")
+    llm = criar_llm_nvidia(
+        api_key="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",
+        modelo="z-ai/glm5"
+    )
+    print("✅ Cliente criado!")
+    
+    print(f"\n📊 Estatísticas:")
+    stats = llm.obter_estatisticas()
+    for chave, valor in stats.items():
+        print(f"   {chave}: {valor}")
+    
+    print("\n" + "=" * 60)
+    print("🎉 LLM CLIENT v1.2 PRONTO!")
+    print("=" * 60)

@@ -302,7 +302,7 @@ def main():
         print("")
         print("+" * 60)
         print("")
-        bot_username = getattr(bot, 'username', None) or 'Lex_Cerebro_bot'
+        bot_username = getattr(bot, 'username', None) or 'seu_bot'
         print(f"   >>> @{bot_username} está ONLINE e OUVINDO!")
         print("")
         print("   BRAIN LLM ORCHESTRATOR v3.0 ATIVO!")

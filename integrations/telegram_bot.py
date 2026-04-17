@@ -42,7 +42,7 @@ COMO USAR:
 1. Configurar token em config/settings.yaml ou variável ambiente
 2. Instalar dependência: pip install python-telegram-bot>=20.7
 3. Executar: python integrations/telegram_bot.py
-4. Enviar /start no @Lex_Cerebro_bot
+4. Enviar /start no @seu_bot
 5. Pronto para usar!
 
 EXEMPLOS DE INTERAÇÃO (CONVERSAÇÃO NATURAL):
@@ -558,7 +558,7 @@ class LexBrainTelegramBot:
             # Print visual no console
             print("\n" + "🟢" * 40)
             print("✅ LEX BRAIN BOT v2.1 CONECTADO!")
-            print(f"   🤖 @Lex_Cerebro_bot")
+            print(f"   🤖 @seu_bot")
             print(f"   🧠 IA Conversacional: {'ATIVA' if BRAIN_DISPONIVEL else 'INATIVA'}")
             print("   📱 Envie /start para começar!")
             print("🟢" * 40 + "\n")
