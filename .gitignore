@@ -23,3 +23,6 @@ data/
 .idea/
 
 prmots de continuidades/
+
+# Ignorar settings locais
+config/settings.yaml
