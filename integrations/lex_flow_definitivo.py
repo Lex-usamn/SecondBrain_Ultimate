@@ -579,69 +579,206 @@ class LexFlowClient:
         log.warning(f"⚠️ Projeto '{nome}' não encontrado")
         return None
     
-    def mover_nota_para_area(self, nota_id: int, area_id: int) -> bool:
+    # =========================================================================
+    # MÉTODOS CORRIGIDOS PARA MOVER NOTAS (v3.5 - USANDO /link)
+    # =========================================================================
+    
+    def mover_nota_para_destino(self, nota_id: int, destino_tipo: str, 
+                                 destino_id: int) -> Dict[str, Any]:
         """
-        Move uma nota para uma área (P.A.R.A).
+        MOVER NOTA - Método principal corrigido (v3.5)
+        
+        Usa o endpoint PUT /api/quicknotes/<id>/link que REALMENTE move!
         
         Args:
-            nota_id: ID da nota
-            area_id: ID da área de destino
+            nota_id: ID da nota a mover
+            destino_tipo: 'project', 'area' ou 'resource'
+            destino_id: ID do destino
             
         Returns:
-            True se moveu com sucesso
+            Dict com resultado da API ou None
         """
         try:
-            log.info(f"📂 Movendo nota {nota_id} para área {area_id}...")
+            log.info(f"📂 [MOVER v3.5] Nota {nota_id} → {destino_tipo}:{destino_id}")
             
-            # Usar PATCH (atualização parcial)
+            # Usar o endpoint CORRETO da API!
             resultado = self._request(
-                'PATCH',
-                f'/quicknotes/{nota_id}',
-                json={"area_id": area_id, "project_id": None}
+                'PUT',
+                f'/quicknotes/{nota_id}/link',
+                json={
+                    'target_type': destino_tipo,
+                    'target_id': destino_id
+                }
             )
             
             if resultado:
-                log.info(f"✅ Nota movida para área!")
-                return True
+                log.info(f"✅ [MOVER v3.5] Sucesso! Resposta: {resultado}")
+                return resultado
             else:
-                log.warning(f"⚠️ Resposta vazia ao mover nota")
-                return False
+                log.warning(f"⚠️ [MOVER v3.5] Resposta vazia")
+                return None
                 
         except Exception as e:
-            log.error(f"❌ Erro movendo nota para área: {e}")
-            return False
+            log.error(f"❌ [MOVER v3.5] Erro: {e}", exc_info=True)
+            return None
     
+    def buscar_nota_por_indice_ou_titulo(self, criterio: str) -> Optional[Dict]:
+        """
+        Busca nota por ÍNDICE (1, 2, 3...) ou TÍTULO/PALAVRA-CHAVE
+        
+        v3.5: Agora entende "item 1", "primeira nota", "nota X", etc.
+        
+        Args:
+            criterio: Pode ser:
+                     - Número: "1", "2", "3" (índice na lista)
+                     - Texto: "homem aranha", "reels" (busca no título)
+                     
+        Returns:
+            Dict da nota encontrada ou None
+        """
+        try:
+            log.info(f"🔍 [BUSCA NOTA] Critério: '{criterio}'")
+            
+            # Pegar inbox robusto
+            inbox = self.get_inbox()
+            
+            # Se get_inbox() falhar (bug conhecido), tentar direto
+            if not inbox:
+                inbox_raw = self._request('GET', '/quicknotes/')
+                if isinstance(inbox_raw, dict) and 'notes' in inbox_raw:
+                    inbox = inbox_raw['notes']
+            
+            if not inbox or not isinstance(inbox, list):
+                log.warning("⚠️ [BUSCA NOTA] Inbox vazio")
+                return None
+            
+            # Tentar converter para número (índice)
+            try:
+                indice = int(criterio.strip())
+                if 1 <= indice <= len(inbox):
+                    nota = inbox[indice - 1]  # Lista começa em 0
+                    log.info(f"✅ [BUSCA NOTA] Encontrado por índice {indice}: {nota.get('title')}")
+                    return nota
+                else:
+                    log.warning(f"⚠️ [BUSCA NOTA] Índice {indice} fora do range (1-{len(inbox)})")
+                    return None
+            except ValueError:
+                pass  # Não é número, buscar por texto
+            
+            # Buscar por texto (case-insensitive)
+            criterio_lower = criterio.lower().strip()
+            palavras = criterio_lower.split()
+            
+            melhor_match = None
+            melhor_score = 0
+            
+            for item in inbox:
+                if not isinstance(item, dict):
+                    continue
+                
+                titulo = str(item.get('title', '')).lower()
+                
+                # Match exato primeiro
+                if criterio_lower == titulo:
+                    log.info(f"✅ [BUSCA NOTA] Match EXATO: {titulo}")
+                    return item
+                
+                # Score baseado em quantas palavras batem
+                score = sum(1 for p in palavras if p in titulo and len(p) > 2)
+                
+                # Bônus se começa com o critério
+                if titulo.startswith(criterio_lower):
+                    score += 2
+                
+                if score > melhor_score:
+                    melhor_score = score
+                    melhor_match = item
+            
+            if melhor_match and melhor_score > 0:
+                log.info(f"✅ [BUSCA NOTA] Melhor match ({melhor_score}): {melhor_match.get('title')}")
+                return melhor_match
+            
+            log.warning(f"❌ [BUSCA NOTA] Nenhuma nota encontrada para '{criterio}'")
+            return None
+            
+        except Exception as e:
+            log.error(f"❌ [BUSCA NOTA] Erro: {e}", exc_info=True)
+            return None
+    
+    def listar_destinos_disponiveis(self) -> Dict[str, List[Dict]]:
+        """
+        Lista todos os destinos possíveis (projetos + áreas)
+        
+        Returns:
+            {'projetos': [...], 'areas': [...]}
+        """
+        return {
+            'projetos': self.listar_projetos(),
+            'areas': self.listar_areas()
+        }
+
     def mover_nota_para_projeto(self, nota_id: int, projeto_id: int) -> bool:
         """
         Move uma nota para um projeto.
         
-        Args:
-            nota_id: ID da nota
-            projeto_id: ID do projeto de destino
-            
-        Returns:
-            True se moveu com sucesso
+        v3.6 - CORRIGIDO: Usa PUT /link em vez de PATCH!
         """
         try:
-            log.info(f"📁 Movendo nota {nota_id} para projeto {projeto_id}...")
+            log.info(f"📁 [MOVER v3.6] Nota {nota_id} → Projeto {projeto_id}")
             
+            # ✅ USAR O ENDPOINT CORRETO DA API!
             resultado = self._request(
-                'PATCH',
-                f'/quicknotes/{nota_id}',
-                json={"project_id": projeto_id, "area_id": None}
+                'PUT',                    # ← MUDOU DE PATCH PARA PUT
+                f'/quicknotes/{nota_id}/link',  # ← MUDOU O ENDPOINT!
+                json={
+                    'target_type': 'project',
+                    'target_id': projeto_id
+                }
             )
             
             if resultado:
-                log.info(f"✅ Nota movida para projeto!")
+                log.info(f"✅ [MOVER v3.6] Nota movida para projeto {projeto_id}!")
                 return True
             else:
-                log.warning(f"⚠️ Resposta vazia ao mover nota")
+                log.warning(f"⚠️ [MOVER v3.6] Resposta vazia")
                 return False
                 
         except Exception as e:
-            log.error(f"❌ Erro movendo nota para projeto: {e}")
+            log.error(f"❌ [MOVER v3.6] Erro: {e}", exc_info=True)
             return False
     
+    def mover_nota_para_area(self, nota_id: int, area_id: int) -> bool:
+        """
+        Move uma nota para uma área (P.A.R.A).
+        
+        v3.6 - CORRIGIDO: Usa PUT /link em vez de PATCH!
+        """
+        try:
+            log.info(f"📂 [MOVER v3.6] Nota {nota_id} → Área {area_id}")
+            
+            # ✅ USAR O ENDPOINT CORRETO DA API!
+            resultado = self._request(
+                'PUT',                    # ← MUDOU DE PATCH PARA PUT
+                f'/quicknotes/{nota_id}/link',  # ← MUDOU O ENDPOINT!
+                json={
+                    'target_type': 'area',
+                    'target_id': area_id
+                }
+            )
+            
+            if resultado:
+                log.info(f"✅ [MOVER v3.6] Nota movida para área {area_id}!")
+                return True
+            else:
+                log.warning(f"⚠️ [COVER v3.6] Resposta vazia")
+                return False
+                
+        except Exception as e:
+            log.error(f"❌ [MOVER v3.6] Erro: {e}", exc_info=True)
+            return False
+
+
+
     def converter_nota_em_tarefa_com_projeto(self, nota_id: int, projeto_id: int) -> Optional[Dict]:
         """
         Converte nota em tarefa E move para projeto em uma operação.
@@ -712,6 +849,78 @@ class LexFlowClient:
             log.info(f"🔄 Nota {note_id} convertida em tarefa")
         
         return result
+
+    def get_notas_por_area(self, area_id: int = None, area_nome: str = None) -> List[Dict]:
+        """
+        Busca notas de uma área específica usando o NOVO endpoint /filter.
+        
+        v3.11 - USA ENDPOINT CORRETO DO FLOW!
+        """
+        try:
+            # Se passou nome, buscar ID primeiro
+            if not area_id and area_nome:
+                area = self.buscar_area_por_nome(area_nome)
+                if area:
+                    area_id = area.get('id')
+                    log.info(f"📋 [NOTAS POR ÁREA] '{area_nome}' → ID={area_id}")
+            
+            if not area_id:
+                log.warning(f"⚠️ [NOTAS POR ÁREA] Sem ID para '{area_nome}'")
+                return []
+            
+            log.info(f"📋 [NOTAS POR ÁREA] Buscando via /filter?area_id={area_id}")
+            
+            # Usar o NOVO endpoint!
+            resultado = self._request('GET', '/quicknotes/filter', 
+                                      params={'area_id': area_id})
+            
+            if resultado and isinstance(resultado, dict):
+                notas = resultado.get('notes', [])
+                log.info(f"✅ [NOTAS POR ÁREA] {len(notas)} notas encontradas!")
+                return notas
+            
+            log.warning(f"⚠️ [NOTAS POR ÁREA] Resposta inesperada: {resultado}")
+            return []
+            
+        except Exception as e:
+            log.error(f"❌ [NOTAS POR ÁREA] Erro: {e}", exc_info=True)
+            return []
+    
+    def get_todas_as_notas(self) -> List[Dict]:
+        """
+        Busca TODAS as notas (inbox + áreas + projetos).
+        
+        v3.11 - Usa /filter?all=true
+        """
+        try:
+            log.info(f"📋 [TODAS NOTAS] Buscando via /filter?all=true")
+            
+            resultado = self._request('GET', '/quicknotes/filter', 
+                                      params={'all': 'true'})
+            
+            if resultado and isinstance(resultado, dict):
+                notas = resultado.get('notes', [])
+                log.info(f"✅ [TODAS NOTAS] {len(notas)} notas totais!")
+                return notas
+            
+            return []
+            
+        except Exception as e:
+            log.error(f"❌ [TODAS NOTAS] Erro: {e}", exc_info=True)
+            return []
+    
+    def get_resumo_organizacao(self) -> Dict:
+        """
+        Resumo completo: quantas notas em cada área/projeto/inbox.
+        
+        v3.11 - Usa /areas-summary
+        """
+        try:
+            return self._request('GET', '/quicknotes/areas-summary') or {}
+        except Exception as e:
+            log.error(f"❌ [RESUMO] Erro: {e}")
+            return {}
+
     
     def search_notes(self, query: str) -> List[Dict]:
         """Busca anotações por título (autocomplete)"""
